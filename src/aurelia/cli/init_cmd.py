@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 import click
@@ -71,4 +72,36 @@ def run_init() -> None:
         with open(gitignore, "a") as f:
             f.write("\n# Aurelia runtime state\n.aurelia/\n")
 
+    # Ensure a git repository exists
+    _ensure_git_repo(project_dir)
+
     click.echo(f"Aurelia project initialized in {aurelia_dir}")
+
+
+def _ensure_git_repo(project_dir: Path) -> None:
+    """Initialize a git repo with an initial commit if one doesn't exist."""
+    git_dir = project_dir / ".git"
+    if git_dir.exists():
+        click.echo("Git repository already exists.")
+        return
+
+    click.echo("Initializing git repository...")
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "add", "."],
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "Initial commit"],
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
+    )
+    click.echo("Created git repository with initial commit.")

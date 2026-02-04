@@ -3,11 +3,30 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
+from unittest.mock import AsyncMock
 
 from aurelia.core.events import EventLog
 from aurelia.core.runtime import Runtime
+from aurelia.sandbox.docker import ContainerResult, DockerClient
+
+
+def _mock_docker_client() -> DockerClient:
+    """Create a mock DockerClient for runtime tests."""
+    mock_stdout = "\n".join([
+        json.dumps({"type": "init", "session_id": "s1", "model": "gemini-2.5-pro"}),
+        json.dumps({"type": "result", "response": "Mock done.", "stats": {}}),
+    ])
+    docker = AsyncMock(spec=DockerClient)
+    docker.check_available = AsyncMock()
+    docker.image_exists = AsyncMock(return_value=True)
+    docker.build_image = AsyncMock()
+    docker.run_container = AsyncMock(
+        return_value=ContainerResult(exit_code=0, stdout=mock_stdout, stderr="")
+    )
+    return docker
 
 
 def _init_project(tmp_path):
@@ -63,7 +82,7 @@ def _init_project(tmp_path):
 class TestRuntimeStartStop:
     async def test_runtime_start_stop(self, tmp_path):
         project_dir = _init_project(tmp_path)
-        runtime = Runtime(project_dir, use_mock=True)
+        runtime = Runtime(project_dir, use_mock=True, docker_client=_mock_docker_client())
 
         async def stop_soon():
             await asyncio.sleep(0.5)
@@ -84,7 +103,7 @@ class TestRuntimePidFile:
     async def test_runtime_creates_pid_file(self, tmp_path):
         project_dir = _init_project(tmp_path)
         pid_path = project_dir / ".aurelia" / "state" / "pid"
-        runtime = Runtime(project_dir, use_mock=True)
+        runtime = Runtime(project_dir, use_mock=True, docker_client=_mock_docker_client())
 
         pid_existed_during_run = False
 
@@ -106,7 +125,7 @@ class TestRuntimeStatePersistence:
     async def test_runtime_state_persistence(self, tmp_path):
         project_dir = _init_project(tmp_path)
         state_dir = project_dir / ".aurelia" / "state"
-        runtime = Runtime(project_dir, use_mock=True)
+        runtime = Runtime(project_dir, use_mock=True, docker_client=_mock_docker_client())
 
         async def stop_after_cycle():
             # Wait long enough for at least one heartbeat cycle

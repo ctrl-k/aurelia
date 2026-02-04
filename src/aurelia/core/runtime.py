@@ -214,12 +214,13 @@ class Runtime:
         # 3. Get or create active candidate
         candidate = self._get_active_candidate()
         if candidate is None:
-            if self._should_terminate():
-                logger.info("Termination condition met")
+            term_reason = self._should_terminate()
+            if term_reason is not None:
+                logger.info("Termination: %s", term_reason)
                 await self._emit(
                     "runtime.terminated",
                     {
-                        "reason": "termination_condition_met",
+                        "reason": term_reason,
                         "total_candidates": len(
                             self._candidates
                         ),
@@ -487,11 +488,7 @@ class Runtime:
         metrics: dict[str, Any] = (
             eval_task.result.metrics if eval_task.result else {}
         )
-        passed = all(
-            v > 0.5
-            for v in metrics.values()
-            if isinstance(v, (int, float))
-        )
+        passed = self._check_metrics_pass(metrics)
 
         # Try to retrieve the latest commit SHA
         try:
@@ -594,40 +591,45 @@ class Runtime:
 
         return best
 
-    def _should_terminate(self) -> bool:
+    def _check_metrics_pass(
+        self, metrics: dict[str, Any]
+    ) -> bool:
+        """Check if metrics satisfy the termination condition.
+
+        If a termination condition is configured (e.g. 'accuracy>=0.95'),
+        returns True only when all specified metrics meet their thresholds.
+        If no termination condition is set, returns True (any completed
+        evaluation is considered passing).
+        """
+        conditions = self._parse_termination_condition()
+        if not conditions:
+            return True
+        for metric, threshold in conditions:
+            val = metrics.get(metric)
+            if (
+                val is None
+                or not isinstance(val, (int, float))
+                or val < threshold
+            ):
+                return False
+        return True
+
+    def _should_terminate(self) -> str | None:
         """Check if the runtime should stop creating candidates.
 
-        Returns True when:
-        - A termination_condition metric threshold is met, OR
-        - The number of failed candidates >= candidate_abandon_threshold.
+        Returns a reason string when termination is warranted,
+        or None to continue.
         """
         # Check metric-based termination
         if self._config.termination_condition:
-            best = self._get_best_candidate()
-            if best is not None:
-                eval_by_id = {
-                    e.id: e for e in self._evaluations
-                }
-                for eval_id in best.evaluations:
-                    ev = eval_by_id.get(eval_id)
-                    if ev is None:
-                        continue
-                    for metric, threshold in (
-                        self._parse_termination_condition()
-                    ):
-                        val = ev.metrics.get(metric)
-                        if (
-                            val is not None
-                            and isinstance(val, (int, float))
-                            and val >= threshold
-                        ):
-                            logger.info(
-                                "Termination: %s=%.3f >= %.3f",
-                                metric,
-                                val,
-                                threshold,
-                            )
-                            return True
+            for ev in self._evaluations:
+                if ev.passed:
+                    logger.info(
+                        "Termination: metrics meet condition"
+                        " '%s'",
+                        self._config.termination_condition,
+                    )
+                    return "termination_condition_met"
 
         # Check abandon threshold
         failed_count = sum(
@@ -640,9 +642,9 @@ class Runtime:
                 "Abandon threshold: %d failed candidates",
                 failed_count,
             )
-            return True
+            return "abandon_threshold_reached"
 
-        return False
+        return None
 
     def _parse_termination_condition(
         self,
