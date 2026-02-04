@@ -17,6 +17,7 @@ from typing import Any
 
 from aurelia.components.coder import CoderComponent
 from aurelia.components.evaluator import EvaluatorComponent
+from aurelia.components.presubmit import PresubmitComponent
 from aurelia.core.config import (
     default_component_specs,
     load_workflow_config,
@@ -269,12 +270,12 @@ class Runtime:
     async def _advance_candidate(
         self, candidate: Candidate, instruction: str
     ) -> None:
-        """Advance the task pipeline for a single candidate."""
+        """Advance the task pipeline for a single candidate.
+
+        Pipeline: coder → presubmit → evaluator → finish.
+        """
         coder_task = self._find_task(
             candidate.branch, "coder"
-        )
-        eval_task = self._find_task(
-            candidate.branch, "evaluator"
         )
 
         if coder_task is None:
@@ -285,49 +286,85 @@ class Runtime:
                 await self._dispatch_coder(
                     candidate, instruction
                 )
-        elif coder_task.status == TaskStatus.running:
-            pass  # Coder still running in background
-        elif coder_task.status == TaskStatus.success:
-            if eval_task is None:
-                if (
-                    len(self._running_asyncio_tasks)
-                    < self._config.max_concurrent_tasks
-                ):
-                    await self._dispatch_evaluator(candidate)
-            elif eval_task.status == TaskStatus.success:
-                await self._finish_candidate(
-                    candidate, eval_task
-                )
-            elif eval_task.status == TaskStatus.failed:
-                candidate.status = CandidateStatus.failed
-                error = (
-                    eval_task.result.error
-                    if eval_task.result
-                    else "unknown"
-                )
-                await self._emit(
-                    "candidate.failed",
-                    {
-                        "candidate_id": candidate.id,
-                        "branch": candidate.branch,
-                        "error": error,
-                    },
-                )
-        elif coder_task.status == TaskStatus.failed:
-            candidate.status = CandidateStatus.failed
-            error = (
-                coder_task.result.error
-                if coder_task.result
-                else "unknown"
+            return
+
+        if coder_task.status == TaskStatus.running:
+            return
+
+        if coder_task.status == TaskStatus.failed:
+            await self._fail_candidate(
+                candidate, coder_task
             )
-            await self._emit(
-                "candidate.failed",
-                {
-                    "candidate_id": candidate.id,
-                    "branch": candidate.branch,
-                    "error": error,
-                },
+            return
+
+        if coder_task.status != TaskStatus.success:
+            return
+
+        # Coder succeeded — check presubmit
+        presubmit_task = self._find_task(
+            candidate.branch, "presubmit"
+        )
+
+        if presubmit_task is None:
+            if (
+                len(self._running_asyncio_tasks)
+                < self._config.max_concurrent_tasks
+            ):
+                await self._dispatch_presubmit(candidate)
+            return
+
+        if presubmit_task.status == TaskStatus.running:
+            return
+
+        if presubmit_task.status == TaskStatus.failed:
+            await self._fail_candidate(
+                candidate, presubmit_task
             )
+            return
+
+        if presubmit_task.status != TaskStatus.success:
+            return
+
+        # Presubmit succeeded — check evaluator
+        eval_task = self._find_task(
+            candidate.branch, "evaluator"
+        )
+
+        if eval_task is None:
+            if (
+                len(self._running_asyncio_tasks)
+                < self._config.max_concurrent_tasks
+            ):
+                await self._dispatch_evaluator(candidate)
+            return
+
+        if eval_task.status == TaskStatus.success:
+            await self._finish_candidate(
+                candidate, eval_task
+            )
+        elif eval_task.status == TaskStatus.failed:
+            await self._fail_candidate(
+                candidate, eval_task
+            )
+
+    async def _fail_candidate(
+        self, candidate: Candidate, failed_task: Task
+    ) -> None:
+        """Mark a candidate as failed due to a task failure."""
+        candidate.status = CandidateStatus.failed
+        error = (
+            failed_task.result.error
+            if failed_task.result
+            else "unknown"
+        )
+        await self._emit(
+            "candidate.failed",
+            {
+                "candidate_id": candidate.id,
+                "branch": candidate.branch,
+                "error": error,
+            },
+        )
 
     # -- Helper methods --------------------------------------------------
 
@@ -436,6 +473,35 @@ class Runtime:
             {"task_id": task.id, "component": "coder"},
         )
         await self._launch_task(task, "coder")
+
+    async def _dispatch_presubmit(
+        self, candidate: Candidate
+    ) -> None:
+        """Create and launch a presubmit task in the background."""
+        task = Task(
+            id=self._id_gen.next_id("task"),
+            thread_id=self._id_gen.next_id("thread"),
+            component="presubmit",
+            branch=candidate.branch,
+            instruction="Run presubmit checks",
+            status=TaskStatus.pending,
+            context={
+                "worktree_path": candidate.worktree_path,
+                "checks": self._config.presubmit_checks,
+            },
+            created_at=datetime.datetime.now(datetime.UTC),
+        )
+        self._tasks.append(task)
+        self._runtime_state.total_tasks_dispatched += 1
+
+        await self._emit(
+            "task.created",
+            {
+                "task_id": task.id,
+                "component": "presubmit",
+            },
+        )
+        await self._launch_task(task, "presubmit")
 
     async def _dispatch_evaluator(
         self, candidate: Candidate
@@ -553,6 +619,12 @@ class Runtime:
                 docker_client=self._docker_client,
             )
             return await component.execute(task)
+
+        if component_name == "presubmit":
+            presubmit = PresubmitComponent(
+                self._event_log, self._id_gen
+            )
+            return await presubmit.execute(task)
 
         if component_name == "evaluator":
             evaluator = EvaluatorComponent(

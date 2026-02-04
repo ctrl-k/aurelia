@@ -188,6 +188,9 @@ class RuntimeConfig(BaseModel):
     heartbeat_interval_s: int = 60
     candidate_abandon_threshold: int = 3
     termination_condition: str = ""
+    presubmit_checks: list[str] = Field(
+        default_factory=lambda: ["pixi run test"]
+    )
     candidate_selection: str = "top_k_with_wildcard"
     report_interval_heartbeats: int = 5
     token_budget: int | None = None

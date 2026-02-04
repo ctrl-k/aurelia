@@ -112,6 +112,13 @@ def monitor() -> None:
 
 
 @cli.command()
-def report() -> None:
-    """Generate a summary report."""
-    click.echo("Not yet implemented.")
+@click.option(
+    "--project-dir",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path.cwd,
+    help="Project root directory.",
+)
+def report(project_dir: Path) -> None:
+    """Generate a summary report of the last run."""
+    from aurelia.cli.report_cmd import run_report
+    run_report(project_dir)

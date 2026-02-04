@@ -94,8 +94,15 @@ def default_component_specs() -> dict[str, ComponentSpec]:
         role="Evaluate solution quality by running the evaluation script",
     )
 
+    presubmit = ComponentSpec(
+        id="presubmit",
+        name="Presubmit",
+        role="Run lint and test checks before evaluation",
+    )
+
     return {
         "root": root,
         "coder": coder,
         "evaluator": evaluator,
+        "presubmit": presubmit,
     }

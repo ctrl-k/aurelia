@@ -40,9 +40,12 @@ def _init_e2e_project(tmp_path):
     for subdir in ["state", "logs", "cache", "reports", "config"]:
         (aurelia_dir / subdir).mkdir(parents=True)
 
-    # Fast heartbeat so the test completes quickly
+    # Fast heartbeat so the test completes quickly; trivial presubmit check
     (aurelia_dir / "config" / "workflow.yaml").write_text(
-        "runtime:\n  heartbeat_interval_s: 1\n"
+        "runtime:\n"
+        "  heartbeat_interval_s: 1\n"
+        "  presubmit_checks:\n"
+        "    - \"true\"\n"
     )
 
     git_env = {
@@ -100,9 +103,10 @@ class TestFullCycleWithMock:
         )
 
         async def stop_after_cycles():
-            # 3 heartbeat cycles needed: dispatch coder, dispatch evaluator,
-            # finish candidate.  With 1s interval, wait ~5s for safety.
-            await asyncio.sleep(5)
+            # 4 heartbeat cycles needed: dispatch coder, dispatch presubmit,
+            # dispatch evaluator, finish candidate.  With 1s interval, wait
+            # ~8s for safety.
+            await asyncio.sleep(8)
             await runtime.stop()
 
         stop_task = asyncio.create_task(stop_after_cycles())
@@ -128,12 +132,12 @@ class TestFullCycleWithMock:
         assert runtime_json.exists()
         runtime_data = json.loads(runtime_json.read_text())
         assert runtime_data["status"] == "stopped"
-        assert runtime_data["total_tasks_dispatched"] >= 2  # coder + evaluator
+        assert runtime_data["total_tasks_dispatched"] >= 3  # coder + presubmit + evaluator
 
         tasks_json = state_dir / "tasks.json"
         assert tasks_json.exists()
         tasks_data = json.loads(tasks_json.read_text())
-        assert len(tasks_data) >= 2  # at least coder + evaluator tasks
+        assert len(tasks_data) >= 3  # at least coder + presubmit + evaluator tasks
 
         candidates_json = state_dir / "candidates.json"
         assert candidates_json.exists()
@@ -164,11 +168,13 @@ class TestTerminationOnMetricThreshold:
         """Runtime should stop when termination_condition is met."""
         project_dir = _init_e2e_project(tmp_path)
 
-        # Set termination condition
+        # Set termination condition; trivial presubmit check
         (project_dir / ".aurelia" / "config" / "workflow.yaml").write_text(
             "runtime:\n"
             "  heartbeat_interval_s: 1\n"
             '  termination_condition: "accuracy>=0.90"\n'
+            "  presubmit_checks:\n"
+            "    - \"true\"\n"
         )
 
         runtime = Runtime(
