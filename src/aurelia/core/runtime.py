@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import logging
 import os
 import signal
@@ -77,6 +78,7 @@ class Runtime:
         self._component_specs: dict[str, ComponentSpec]
         self._tasks: list[Task]
         self._candidates: list[Candidate]
+        self._evaluations: list[Evaluation]
 
     # -- Public API -------------------------------------------------------
 
@@ -100,6 +102,7 @@ class Runtime:
         self._id_gen = IdGenerator(self._runtime_state)
         self._tasks = await self._state_store.load_tasks()
         self._candidates = await self._state_store.load_candidates()
+        self._evaluations = await self._state_store.load_evaluations()
 
         # 4. Git repo setup
         self._git = GitRepo(self._project_dir)
@@ -211,6 +214,19 @@ class Runtime:
         # 3. Get or create active candidate
         candidate = self._get_active_candidate()
         if candidate is None:
+            if self._should_terminate():
+                logger.info("Termination condition met")
+                await self._emit(
+                    "runtime.terminated",
+                    {
+                        "reason": "termination_condition_met",
+                        "total_candidates": len(
+                            self._candidates
+                        ),
+                    },
+                )
+                self._shutdown_event.set()
+                return
             candidate = await self._create_candidate()
 
         # 4. Check task pipeline for this candidate
@@ -289,17 +305,34 @@ class Runtime:
         return None
 
     async def _create_candidate(self) -> Candidate:
-        """Create a new candidate branch and worktree."""
+        """Create a new candidate branch and worktree.
+
+        Branches from the best previous candidate if one succeeded,
+        otherwise from main.
+        """
         cand_id = self._id_gen.next_id("cand")
         branch = f"aurelia/{cand_id}"
 
-        await self._git.create_branch(branch)
+        best = self._get_best_candidate()
+        if best is not None:
+            parent_branch = best.branch
+            logger.info(
+                "Branching %s from best candidate %s",
+                branch,
+                parent_branch,
+            )
+        else:
+            parent_branch = "main"
+
+        await self._git.create_branch(
+            branch, from_branch=parent_branch
+        )
         wt_path = await self._worktrees.create(branch)
 
         candidate = Candidate(
             id=cand_id,
             branch=branch,
-            parent_branch="main",
+            parent_branch=parent_branch,
             status=CandidateStatus.active,
             created_at=datetime.datetime.now(datetime.UTC),
             worktree_path=str(wt_path),
@@ -308,7 +341,11 @@ class Runtime:
 
         await self._emit(
             "candidate.created",
-            {"candidate_id": cand_id, "branch": branch},
+            {
+                "candidate_id": cand_id,
+                "branch": branch,
+                "parent_branch": parent_branch,
+            },
         )
         return candidate
 
@@ -328,6 +365,8 @@ class Runtime:
             context={
                 "worktree_path": candidate.worktree_path,
                 "problem_description": self._read_instruction(),
+                "feedback": self._build_feedback_text(),
+                "attempt_number": len(self._candidates),
             },
             created_at=datetime.datetime.now(datetime.UTC),
         )
@@ -480,6 +519,7 @@ class Runtime:
             passed=passed,
         )
 
+        self._evaluations.append(evaluation)
         candidate.evaluations.append(evaluation.id)
         candidate.status = (
             CandidateStatus.succeeded
@@ -496,6 +536,131 @@ class Runtime:
                 "passed": passed,
             },
         )
+
+    # -- Feedback and evolution helpers ------------------------------------
+
+    def _build_feedback_text(self) -> str:
+        """Format previous attempts into feedback for the coder."""
+        if not self._evaluations:
+            return ""
+
+        lines: list[str] = []
+        eval_by_id = {e.id: e for e in self._evaluations}
+
+        for i, cand in enumerate(self._candidates, 1):
+            for eval_id in cand.evaluations:
+                ev = eval_by_id.get(eval_id)
+                if ev is None:
+                    continue
+                lines.append(f"### Attempt {i}")
+                lines.append(
+                    f"- Status: {'PASSED' if ev.passed else 'FAILED'}"
+                )
+                lines.append(
+                    f"- Metrics: {json.dumps(ev.metrics)}"
+                )
+                if ev.raw_output:
+                    lines.append(
+                        f"- Output: {ev.raw_output[:200]}"
+                    )
+                lines.append("")
+
+        return "\n".join(lines)
+
+    def _get_best_candidate(self) -> Candidate | None:
+        """Find the succeeded candidate with the highest average metric."""
+        eval_by_id = {e.id: e for e in self._evaluations}
+        best: Candidate | None = None
+        best_score = -1.0
+
+        for cand in self._candidates:
+            if cand.status != CandidateStatus.succeeded:
+                continue
+            for eval_id in cand.evaluations:
+                ev = eval_by_id.get(eval_id)
+                if ev is None or not ev.passed:
+                    continue
+                nums = [
+                    v
+                    for v in ev.metrics.values()
+                    if isinstance(v, (int, float))
+                ]
+                if not nums:
+                    continue
+                score = sum(nums) / len(nums)
+                if score > best_score:
+                    best_score = score
+                    best = cand
+
+        return best
+
+    def _should_terminate(self) -> bool:
+        """Check if the runtime should stop creating candidates.
+
+        Returns True when:
+        - A termination_condition metric threshold is met, OR
+        - The number of failed candidates >= candidate_abandon_threshold.
+        """
+        # Check metric-based termination
+        if self._config.termination_condition:
+            best = self._get_best_candidate()
+            if best is not None:
+                eval_by_id = {
+                    e.id: e for e in self._evaluations
+                }
+                for eval_id in best.evaluations:
+                    ev = eval_by_id.get(eval_id)
+                    if ev is None:
+                        continue
+                    for metric, threshold in (
+                        self._parse_termination_condition()
+                    ):
+                        val = ev.metrics.get(metric)
+                        if (
+                            val is not None
+                            and isinstance(val, (int, float))
+                            and val >= threshold
+                        ):
+                            logger.info(
+                                "Termination: %s=%.3f >= %.3f",
+                                metric,
+                                val,
+                                threshold,
+                            )
+                            return True
+
+        # Check abandon threshold
+        failed_count = sum(
+            1
+            for c in self._candidates
+            if c.status == CandidateStatus.failed
+        )
+        if failed_count >= self._config.candidate_abandon_threshold:
+            logger.warning(
+                "Abandon threshold: %d failed candidates",
+                failed_count,
+            )
+            return True
+
+        return False
+
+    def _parse_termination_condition(
+        self,
+    ) -> list[tuple[str, float]]:
+        """Parse 'accuracy>=0.95,f1>=0.9' into [(metric, threshold)]."""
+        if not self._config.termination_condition:
+            return []
+        conditions: list[tuple[str, float]] = []
+        for part in self._config.termination_condition.split(
+            ","
+        ):
+            part = part.strip()
+            if ">=" in part:
+                metric, value = part.split(">=", 1)
+                conditions.append(
+                    (metric.strip(), float(value.strip()))
+                )
+        return conditions
 
     # -- Event emission and state persistence -----------------------------
 
@@ -520,6 +685,9 @@ class Runtime:
         await self._state_store.save_tasks(self._tasks)
         await self._state_store.save_candidates(
             self._candidates
+        )
+        await self._state_store.save_evaluations(
+            self._evaluations
         )
 
     # -- Signal handling --------------------------------------------------

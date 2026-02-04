@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from aurelia.core.models import RuntimeConfig, RuntimeState, Task, TaskStatus
+from aurelia.core.models import Evaluation, RuntimeConfig, RuntimeState, Task, TaskStatus
 from aurelia.core.state import StateStore
 
 NOW = datetime(2025, 6, 15, 12, 0, 0, tzinfo=UTC)
@@ -93,6 +93,33 @@ class TestCorruptionRecovery:
 
         loaded = await store.load_runtime()
         assert loaded == good_state
+
+
+class TestEvaluationsRoundTrip:
+    async def test_save_load(self, tmp_path):
+        store = StateStore(tmp_path)
+        evals = [
+            Evaluation(
+                id="eval-0001",
+                task_id="task-0001",
+                candidate_branch="aurelia/cand-0001",
+                commit_sha="abc123",
+                metrics={"accuracy": 0.95, "speed_ms": 10.0},
+                raw_output="All tests passed",
+                timestamp=NOW,
+                passed=True,
+            )
+        ]
+        await store.save_evaluations(evals)
+        loaded = await store.load_evaluations()
+        assert len(loaded) == 1
+        assert loaded[0].id == "eval-0001"
+        assert loaded[0].metrics["accuracy"] == 0.95
+        assert loaded[0].passed is True
+
+    async def test_missing_returns_empty(self, tmp_path):
+        store = StateStore(tmp_path)
+        assert await store.load_evaluations() == []
 
 
 class TestInitialize:

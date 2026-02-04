@@ -421,3 +421,97 @@ class TestParseTranscript:
         ]
         text, stats = CoderComponent._parse_transcript("\n".join(lines))
         assert text == "ok"
+
+
+class TestCoderForwardsApiKeys:
+    async def test_forwards_env_vars_to_container(self, tmp_path, monkeypatch):
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+        (tmp_path / ".aurelia" / "logs" / "transcripts").mkdir(parents=True)
+
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key-123")
+
+        sandbox = SandboxConfig(
+            image="aurelia-coder:latest",
+            network=True,
+            env_forward=["GEMINI_API_KEY", "MISSING_KEY"],
+        )
+
+        docker = _mock_docker(
+            container_result=ContainerResult(exit_code=0, stdout=_stream_json_output(), stderr="")
+        )
+
+        event_log = EventLog(tmp_path / "events.jsonl")
+        id_gen = IdGenerator(RuntimeState())
+        component = CoderComponent(
+            spec=_make_spec(sandbox),
+            llm_client=MockLLMClient(),
+            tool_registry=ToolRegistry(),
+            event_log=event_log,
+            id_generator=id_gen,
+            project_dir=tmp_path,
+            docker_client=docker,
+        )
+
+        task = _make_task(str(worktree))
+        await component.execute(task)
+
+        call_kwargs = docker.run_container.call_args.kwargs
+        env = call_kwargs["env"]
+        assert env["GEMINI_API_KEY"] == "test-key-123"
+        assert env["GEMINI_SYSTEM_MD"] == "/workspace/.gemini_system.md"
+        # MISSING_KEY should not be in env since it's not set on host
+        assert "MISSING_KEY" not in env
+
+
+class TestCoderFeedbackInPrompt:
+    async def test_feedback_included_in_system_prompt(self, tmp_path):
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+        (tmp_path / ".aurelia" / "logs" / "transcripts").mkdir(parents=True)
+
+        docker = _mock_docker(
+            container_result=ContainerResult(exit_code=0, stdout=_stream_json_output(), stderr="")
+        )
+
+        event_log = EventLog(tmp_path / "events.jsonl")
+        id_gen = IdGenerator(RuntimeState())
+        component = CoderComponent(
+            spec=_make_spec(),
+            llm_client=MockLLMClient(),
+            tool_registry=ToolRegistry(),
+            event_log=event_log,
+            id_generator=id_gen,
+            project_dir=tmp_path,
+            docker_client=docker,
+        )
+
+        task = _make_task(str(worktree))
+        task.context["feedback"] = "### Attempt 1\n- Status: FAILED\n- Metrics: {}"
+        task.context["attempt_number"] = 2
+
+        # Call _build_system_prompt directly to inspect
+        prompt = component._build_system_prompt(task)
+        assert "attempt #2" in prompt.lower()
+        assert "Attempt 1" in prompt
+        assert "FAILED" in prompt
+
+    async def test_first_attempt_message(self, tmp_path):
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+
+        event_log = EventLog(tmp_path / "events.jsonl")
+        id_gen = IdGenerator(RuntimeState())
+        component = CoderComponent(
+            spec=_make_spec(),
+            llm_client=MockLLMClient(),
+            tool_registry=ToolRegistry(),
+            event_log=event_log,
+            id_generator=id_gen,
+            project_dir=tmp_path,
+        )
+
+        task = _make_task(str(worktree))
+        # No feedback in context
+        prompt = component._build_system_prompt(task)
+        assert "first attempt" in prompt.lower()

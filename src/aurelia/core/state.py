@@ -8,7 +8,7 @@ from typing import TypeVar
 import anyio.to_thread
 from pydantic import BaseModel
 
-from aurelia.core.models import Candidate, RuntimeConfig, RuntimeState, Task
+from aurelia.core.models import Candidate, Evaluation, RuntimeConfig, RuntimeState, Task
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -58,6 +58,18 @@ class StateStore:
         await self._save_file(
             self._state_dir / "candidates.json",
             [c.model_dump(mode="json") for c in candidates],
+        )
+
+    async def load_evaluations(self) -> list[Evaluation]:
+        data = await self._load_file(self._state_dir / "evaluations.json")
+        if data is None:
+            return []
+        return [Evaluation.model_validate(item) for item in data]
+
+    async def save_evaluations(self, evaluations: list[Evaluation]) -> None:
+        await self._save_file(
+            self._state_dir / "evaluations.json",
+            [e.model_dump(mode="json") for e in evaluations],
         )
 
     async def initialize(self, config: RuntimeConfig) -> None:  # noqa: ARG002

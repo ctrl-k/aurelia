@@ -16,7 +16,21 @@ loop driven by a heartbeat scheduler.
      inside a Docker container to read and modify the solution.
    - An **evaluator** runs `pixi run evaluate` in the worktree and collects metrics.
    - Results are recorded as events in an append-only JSONL log.
-4. The runtime shuts down gracefully on `SIGTERM` or `SIGINT`, persisting all state.
+   - On the next cycle, a new candidate is created — branching from the best
+     previous solution if one succeeded — and the coder receives feedback from
+     all prior evaluation results.
+4. The runtime stops when a termination condition is met, when too many
+   candidates fail, or on `SIGTERM` / `SIGINT`.
+
+## Environment variables
+
+Set your API key before running Aurelia:
+
+```bash
+export GEMINI_API_KEY=your-key-here    # for Gemini CLI
+```
+
+The key is forwarded into the Docker container automatically.
 
 ## Setup
 
@@ -63,6 +77,18 @@ aurelia init                  Initialize .aurelia/ in the current directory
 aurelia start [--mock]        Start the runtime (--mock uses a fake LLM)
 aurelia stop                  Send SIGTERM to a running runtime
 aurelia status                Print runtime state summary
+```
+
+## Configuration
+
+After `aurelia init`, settings are in `.aurelia/config/workflow.yaml`:
+
+```yaml
+runtime:
+  heartbeat_interval_s: 60
+  max_concurrent_tasks: 4
+  termination_condition: "accuracy>=0.95"   # stop when this metric is reached
+  candidate_abandon_threshold: 3            # stop after this many failures
 ```
 
 ## Development

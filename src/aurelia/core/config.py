@@ -84,6 +84,7 @@ def default_component_specs() -> dict[str, ComponentSpec]:
             image="aurelia-coder:latest",
             network=True,  # Gemini CLI needs API access
             timeout_s=600,
+            env_forward=["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         ),
     )
 

@@ -24,9 +24,9 @@ def run_init() -> None:
         default="gemini",
     )
 
-    # API key
+    # API key hint
     env_var = {
-        "gemini": "GOOGLE_API_KEY",
+        "gemini": "GEMINI_API_KEY",
         "openai": "OPENAI_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
     }
@@ -37,19 +37,28 @@ def run_init() -> None:
     # Runtime parameters
     max_concurrent = click.prompt("Max concurrent tasks", default=4, type=int)
     heartbeat_s = click.prompt("Heartbeat interval (seconds)", default=60, type=int)
+    termination = click.prompt(
+        "Termination condition (e.g. 'accuracy>=0.95', or empty)",
+        default="",
+        type=str,
+    )
 
     # Create .aurelia directory structure
     aurelia_dir = project_dir / ".aurelia"
     for subdir in ["state", "logs", "cache", "reports", "config"]:
         (aurelia_dir / subdir).mkdir(parents=True, exist_ok=True)
 
-    # Write workflow config
+    # Write workflow config (nested under runtime: key)
+    lines = [
+        "runtime:",
+        f"  max_concurrent_tasks: {max_concurrent}",
+        f"  heartbeat_interval_s: {heartbeat_s}",
+    ]
+    if termination:
+        lines.append(f'  termination_condition: "{termination}"')
+
     workflow_cfg = aurelia_dir / "config" / "workflow.yaml"
-    workflow_cfg.write_text(
-        f"provider: {provider}\n"
-        f"max_concurrent_tasks: {max_concurrent}\n"
-        f"heartbeat_interval_s: {heartbeat_s}\n"
-    )
+    workflow_cfg.write_text("\n".join(lines) + "\n")
 
     # Write components config (empty placeholder)
     components_cfg = aurelia_dir / "config" / "components.yaml"

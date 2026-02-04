@@ -10,6 +10,9 @@ You are a software engineer working on improving a solution to a programming pro
 ## Task
 {instruction}
 
+## Previous Attempts
+{previous_attempts}
+
 ## Guidelines
 - Start by reading the existing code to understand the current solution.
 - Make targeted, minimal changes that address the task.

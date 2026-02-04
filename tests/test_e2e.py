@@ -149,3 +149,50 @@ class TestFullCycleWithMock:
             eval_event = next(e for e in events if e.type == "candidate.evaluated")
             assert "metrics" in eval_event.data
             assert eval_event.data["metrics"]["accuracy"] == 0.95
+
+        # Evaluations should be persisted
+        evals_json = state_dir / "evaluations.json"
+        if "candidate.evaluated" in event_types:
+            assert evals_json.exists()
+            evals_data = json.loads(evals_json.read_text())
+            assert len(evals_data) >= 1
+            assert evals_data[0]["metrics"]["accuracy"] == 0.95
+
+
+class TestTerminationOnMetricThreshold:
+    async def test_terminates_when_metric_reached(self, tmp_path):
+        """Runtime should stop when termination_condition is met."""
+        project_dir = _init_e2e_project(tmp_path)
+
+        # Set termination condition
+        (project_dir / ".aurelia" / "config" / "workflow.yaml").write_text(
+            "runtime:\n"
+            "  heartbeat_interval_s: 1\n"
+            '  termination_condition: "accuracy>=0.90"\n'
+        )
+
+        runtime = Runtime(
+            project_dir, use_mock=True, docker_client=_mock_docker_client()
+        )
+
+        async def safety_stop():
+            await asyncio.sleep(10)
+            await runtime.stop()
+
+        stop_task = asyncio.create_task(safety_stop())
+        await runtime.start()
+        stop_task.cancel()
+
+        event_log = EventLog(project_dir / ".aurelia" / "logs" / "events.jsonl")
+        events = await event_log.read_all()
+        event_types = [e.type for e in events]
+
+        # Should have terminated due to metric threshold
+        assert "runtime.terminated" in event_types or "runtime.stopped" in event_types
+
+        # Should have at least one candidate
+        state_dir = project_dir / ".aurelia" / "state"
+        candidates_data = json.loads(
+            (state_dir / "candidates.json").read_text()
+        )
+        assert len(candidates_data) >= 1

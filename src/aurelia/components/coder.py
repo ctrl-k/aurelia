@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import os
 from pathlib import Path
 
 from aurelia.components.base import BaseComponent
@@ -90,12 +91,18 @@ class CoderComponent(BaseComponent):
                 "stream-json",
             ]
 
+            # Build env dict: system prompt path + forwarded host vars
+            env = {"GEMINI_SYSTEM_MD": "/workspace/.gemini_system.md"}
+            for key in sandbox.env_forward:
+                if value := os.environ.get(key):
+                    env[key] = value
+
             result = await self._docker.run_container(
                 image=sandbox.image,
                 command=command,
                 sandbox_config=sandbox,
                 workdir="/workspace",
-                env={"GEMINI_SYSTEM_MD": "/workspace/.gemini_system.md"},
+                env=env,
                 mounts=[
                     (str(worktree_path), "/workspace", False),
                 ],
@@ -162,11 +169,23 @@ class CoderComponent(BaseComponent):
     def _build_system_prompt(self, task: Task) -> str:
         """Load coder_system.txt and fill in variables from task.context."""
         template = (_PROMPT_DIR / "coder_system.txt").read_text()
+
+        feedback = task.context.get("feedback", "")
+        attempt = task.context.get("attempt_number", 1)
+        if feedback:
+            previous_attempts = (
+                f"This is attempt #{attempt}. "
+                f"Learn from previous attempts:\n\n{feedback}"
+            )
+        else:
+            previous_attempts = "This is the first attempt."
+
         return template.format(
             problem_description=task.context.get("problem_description", ""),
             branch=task.branch,
-            worktree_path="/workspace",  # always /workspace inside container
+            worktree_path="/workspace",
             instruction=task.instruction,
+            previous_attempts=previous_attempts,
         )
 
     def _build_user_prompt(self, task: Task) -> str:

@@ -46,6 +46,7 @@ class SandboxConfig(BaseModel):
     read_only_mounts: list[str] = Field(default_factory=list)
     writable_mounts: list[str] = Field(default_factory=list)
     timeout_s: int = 300
+    env_forward: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
