@@ -1,0 +1,130 @@
+"""End-to-end integration test for a full Aurelia runtime cycle with mock LLM."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import subprocess
+
+from aurelia.core.events import EventLog
+from aurelia.core.runtime import Runtime
+
+
+def _init_e2e_project(tmp_path):
+    """Create a project directory with git repo, evaluate.py, and solution.py."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "README.md").write_text(
+        "# Test Problem\nImplement a function that adds two numbers.\n"
+    )
+    (project_dir / "solution.py").write_text(
+        "def add(a, b):\n    return a + b\n"
+    )
+    (project_dir / "evaluate.py").write_text(
+        'import json\nprint(json.dumps({"accuracy": 0.95, "speed_ms": 5.0}))\n'
+    )
+    (project_dir / "pixi.toml").write_text(
+        "[workspace]\n"
+        'name = "test-project"\nchannels = ["conda-forge"]\n'
+        'platforms = ["osx-arm64", "osx-64", "linux-64"]\n\n'
+        "[dependencies]\n"
+        'python = ">=3.12"\n\n'
+        "[tasks]\n"
+        'evaluate = "python evaluate.py"\n'
+    )
+
+    aurelia_dir = project_dir / ".aurelia"
+    for subdir in ["state", "logs", "cache", "reports", "config"]:
+        (aurelia_dir / subdir).mkdir(parents=True)
+
+    # Fast heartbeat so the test completes quickly
+    (aurelia_dir / "config" / "workflow.yaml").write_text(
+        "runtime:\n  heartbeat_interval_s: 1\n"
+    )
+
+    git_env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "test@test.com",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "test@test.com",
+    }
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "add", "."],
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
+        env=git_env,
+    )
+
+    return project_dir
+
+
+class TestFullCycleWithMock:
+    async def test_full_cycle_with_mock(self, tmp_path):
+        project_dir = _init_e2e_project(tmp_path)
+        runtime = Runtime(project_dir, use_mock=True)
+
+        async def stop_after_cycles():
+            # 3 heartbeat cycles needed: dispatch coder, dispatch evaluator,
+            # finish candidate.  With 1s interval, wait ~5s for safety.
+            await asyncio.sleep(5)
+            await runtime.stop()
+
+        stop_task = asyncio.create_task(stop_after_cycles())
+        await runtime.start()
+        await stop_task
+
+        # -- Verify events --
+        event_log = EventLog(project_dir / ".aurelia" / "logs" / "events.jsonl")
+        events = await event_log.read_all()
+        event_types = [e.type for e in events]
+
+        assert "runtime.started" in event_types
+        assert "runtime.stopped" in event_types
+        assert "candidate.created" in event_types
+        assert "task.created" in event_types
+        assert "task.started" in event_types
+        assert "task.completed" in event_types
+
+        # -- Verify state files --
+        state_dir = project_dir / ".aurelia" / "state"
+
+        runtime_json = state_dir / "runtime.json"
+        assert runtime_json.exists()
+        runtime_data = json.loads(runtime_json.read_text())
+        assert runtime_data["status"] == "stopped"
+        assert runtime_data["total_tasks_dispatched"] >= 2  # coder + evaluator
+
+        tasks_json = state_dir / "tasks.json"
+        assert tasks_json.exists()
+        tasks_data = json.loads(tasks_json.read_text())
+        assert len(tasks_data) >= 2  # at least coder + evaluator tasks
+
+        candidates_json = state_dir / "candidates.json"
+        assert candidates_json.exists()
+        candidates_data = json.loads(candidates_json.read_text())
+        assert len(candidates_data) >= 1
+
+        # The candidate should have been evaluated
+        candidate = candidates_data[0]
+        assert candidate["status"] in ("succeeded", "failed", "evaluating")
+
+        # If the full cycle completed, we should see the evaluator events
+        if "candidate.evaluated" in event_types:
+            eval_event = next(e for e in events if e.type == "candidate.evaluated")
+            assert "metrics" in eval_event.data
+            assert eval_event.data["metrics"]["accuracy"] == 0.95

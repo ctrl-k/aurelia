@@ -1,0 +1,23 @@
+[workspace]
+name = "aurelia"
+version = "0.1.0"
+description = "Automated discovery from the command line"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64"]
+
+[dependencies]
+python = ">=3.12"
+pyyaml = ">=6.0.3,<7"
+
+[pypi-dependencies]
+aurelia = { path = ".", editable = true }
+pytest = ">=8.0"
+pytest-asyncio = ">=0.24"
+ruff = ">=0.8"
+pyright = ">=1.1"
+
+[tasks]
+test = "pytest tests/"
+lint = "ruff check src/ tests/"
+typecheck = "pyright src/"
+fmt = "ruff format src/ tests/"

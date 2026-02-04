@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+.pixi/
+.claude/
+
+DESIGN.md
+OBJECTIVE.md
