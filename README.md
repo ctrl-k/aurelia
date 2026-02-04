@@ -12,15 +12,15 @@ loop driven by a heartbeat scheduler.
 2. Aurelia initializes a `.aurelia/` directory to hold runtime state, logs, and config.
 3. On `aurelia start`, a heartbeat loop begins:
    - A candidate git branch and worktree are created.
-   - A **coder** agent reads the problem, uses tools (`read_file`, `write_file`,
-     `run_command`) via an LLM to modify the solution.
+   - A **coder** agent runs [Gemini CLI](https://github.com/google-gemini/gemini-cli)
+     inside a Docker container to read and modify the solution.
    - An **evaluator** runs `pixi run evaluate` in the worktree and collects metrics.
    - Results are recorded as events in an append-only JSONL log.
 4. The runtime shuts down gracefully on `SIGTERM` or `SIGINT`, persisting all state.
 
 ## Setup
 
-Requires [pixi](https://pixi.sh) and Python 3.12+.
+Requires [pixi](https://pixi.sh), Python 3.12+, and [Docker](https://docs.docker.com/get-docker/).
 
 ```
 pixi install
@@ -83,5 +83,6 @@ src/aurelia/
   components/    Base component engine, coder, evaluator, prompt templates
   llm/           LLM client protocol, mock client, response cache
   git/           Async git operations and worktree management
+  sandbox/       Docker client, Dockerfile for containerised code agents
   tools/         MCP tool server (read_file, write_file, run_command) and registry
 ```

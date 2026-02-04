@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-from aurelia.core.models import ComponentSpec, ModelConfig, RuntimeConfig
+from aurelia.core.models import ComponentSpec, ModelConfig, RuntimeConfig, SandboxConfig
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,12 @@ def default_component_specs() -> dict[str, ComponentSpec]:
         name="Coder",
         role="Write and modify code to solve the problem",
         model=ModelConfig(),
-        tools=["read_file", "write_file", "run_command"],
+        tools=[],  # Gemini CLI provides its own tools
+        sandbox=SandboxConfig(
+            image="aurelia-coder:latest",
+            network=True,  # Gemini CLI needs API access
+            timeout_s=600,
+        ),
     )
 
     evaluator = ComponentSpec(

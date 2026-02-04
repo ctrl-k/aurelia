@@ -6,9 +6,11 @@ import asyncio
 import json
 import os
 import subprocess
+from unittest.mock import AsyncMock
 
 from aurelia.core.events import EventLog
 from aurelia.core.runtime import Runtime
+from aurelia.sandbox.docker import ContainerResult, DockerClient
 
 
 def _init_e2e_project(tmp_path):
@@ -73,10 +75,29 @@ def _init_e2e_project(tmp_path):
     return project_dir
 
 
+def _mock_docker_client() -> DockerClient:
+    """Create a mock DockerClient that simulates a successful Gemini CLI run."""
+    mock_stdout = "\n".join([
+        json.dumps({"type": "init", "session_id": "s1", "model": "gemini-2.5-pro"}),
+        json.dumps({"type": "message", "role": "assistant", "content": "Done."}),
+        json.dumps({"type": "result", "response": "Mock coder done.", "stats": {}}),
+    ])
+    docker = AsyncMock(spec=DockerClient)
+    docker.check_available = AsyncMock()
+    docker.image_exists = AsyncMock(return_value=True)
+    docker.build_image = AsyncMock()
+    docker.run_container = AsyncMock(
+        return_value=ContainerResult(exit_code=0, stdout=mock_stdout, stderr="")
+    )
+    return docker
+
+
 class TestFullCycleWithMock:
     async def test_full_cycle_with_mock(self, tmp_path):
         project_dir = _init_e2e_project(tmp_path)
-        runtime = Runtime(project_dir, use_mock=True)
+        runtime = Runtime(
+            project_dir, use_mock=True, docker_client=_mock_docker_client()
+        )
 
         async def stop_after_cycles():
             # 3 heartbeat cycles needed: dispatch coder, dispatch evaluator,

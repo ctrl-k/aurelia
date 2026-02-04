@@ -8,3 +8,6 @@ __pycache__/
 
 DESIGN.md
 OBJECTIVE.md
+
+# Aurelia runtime state
+.aurelia/

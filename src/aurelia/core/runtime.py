@@ -39,6 +39,7 @@ from aurelia.core.state import StateStore
 from aurelia.git.repo import GitRepo
 from aurelia.git.worktree import WorktreeManager
 from aurelia.llm.client import LLMClient, MockLLMClient
+from aurelia.sandbox.docker import DockerClient
 from aurelia.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -55,10 +56,12 @@ class Runtime:
         self,
         project_dir: Path,
         use_mock: bool = False,
+        docker_client: DockerClient | None = None,
     ) -> None:
         self._project_dir = project_dir
         self._aurelia_dir = project_dir / ".aurelia"
         self._use_mock = use_mock
+        self._docker_client = docker_client
         self._shutdown_event = asyncio.Event()
 
         # Initialized in start()
@@ -423,6 +426,7 @@ class Runtime:
                 event_log=self._event_log,
                 id_generator=self._id_gen,
                 project_dir=self._project_dir,
+                docker_client=self._docker_client,
             )
             return await component.execute(task)
 
