@@ -64,6 +64,9 @@ class Runtime:
         self._use_mock = use_mock
         self._docker_client = docker_client
         self._shutdown_event = asyncio.Event()
+        self._running_asyncio_tasks: dict[
+            str, asyncio.Task[TaskResult | None]
+        ] = {}
 
         # Initialized in start()
         self._state_store: StateStore
@@ -124,7 +127,10 @@ class Runtime:
             )
             self._llm_client = MockLLMClient()
 
-        # 7. Update runtime state
+        # 7. Crash recovery (before marking as running)
+        await self._recover_from_crash()
+
+        # 8. Update runtime state
         self._runtime_state.status = "running"
         self._runtime_state.started_at = datetime.datetime.now(
             datetime.UTC
@@ -148,6 +154,22 @@ class Runtime:
         try:
             await self._heartbeat_loop()
         finally:
+            # Cancel all background tasks
+            for handle in self._running_asyncio_tasks.values():
+                handle.cancel()
+            if self._running_asyncio_tasks:
+                await asyncio.gather(
+                    *self._running_asyncio_tasks.values(),
+                    return_exceptions=True,
+                )
+            for task in self._tasks:
+                if task.status == TaskStatus.running:
+                    task.status = TaskStatus.cancelled
+                    task.completed_at = datetime.datetime.now(
+                        datetime.UTC
+                    )
+            self._running_asyncio_tasks.clear()
+
             self._runtime_state.status = "stopped"
             self._runtime_state.stopped_at = datetime.datetime.now(
                 datetime.UTC
@@ -188,14 +210,11 @@ class Runtime:
     async def _heartbeat_cycle(self) -> None:
         """Execute one heartbeat iteration.
 
-        Simplified Phase 1b cycle:
-        1. Read instruction (detect changes via hash)
-        2. Collect completed/failed tasks
-        3. If no active candidate, create one (branch + worktree)
-        4. If candidate has no running coder task, dispatch coder
-        5. If coder completed, dispatch evaluator
-        6. If evaluator completed, record evaluation and mark candidate
-        7. Persist state
+        1. Emit heartbeat, read instruction
+        2. Collect completed background tasks
+        3. Advance pipeline for each active candidate
+        4. Check termination conditions
+        5. Launch new candidates up to concurrency limit
         """
         self._runtime_state.heartbeat_count += 1
         now = datetime.datetime.now(datetime.UTC)
@@ -209,40 +228,76 @@ class Runtime:
         # 1. Read instruction from README.md
         instruction = self._read_instruction()
 
-        # 2. (Future: collect completed/failed async tasks)
+        # 2. Collect completed background tasks
+        await self._collect_completed_tasks()
 
-        # 3. Get or create active candidate
-        candidate = self._get_active_candidate()
-        if candidate is None:
-            term_reason = self._should_terminate()
-            if term_reason is not None:
-                logger.info("Termination: %s", term_reason)
-                await self._emit(
-                    "runtime.terminated",
-                    {
-                        "reason": term_reason,
-                        "total_candidates": len(
-                            self._candidates
-                        ),
-                    },
-                )
-                self._shutdown_event.set()
-                return
+        # 3. Advance pipeline for each active candidate
+        for candidate in self._get_active_candidates():
+            await self._advance_candidate(
+                candidate, instruction
+            )
+
+        # 4. Check termination
+        term_reason = self._should_terminate()
+        if term_reason is not None:
+            logger.info("Termination: %s", term_reason)
+            await self._emit(
+                "runtime.terminated",
+                {
+                    "reason": term_reason,
+                    "total_candidates": len(
+                        self._candidates
+                    ),
+                },
+            )
+            self._shutdown_event.set()
+            return
+
+        # 5. Launch new candidates up to concurrency limit
+        active = len(self._get_active_candidates())
+        while (
+            active < self._config.max_concurrent_tasks
+            and len(self._running_asyncio_tasks)
+            < self._config.max_concurrent_tasks
+        ):
             candidate = await self._create_candidate()
+            await self._dispatch_coder(
+                candidate, instruction
+            )
+            active += 1
 
-        # 4. Check task pipeline for this candidate
-        coder_task = self._find_task(candidate.branch, "coder")
-        eval_task = self._find_task(candidate.branch, "evaluator")
+    async def _advance_candidate(
+        self, candidate: Candidate, instruction: str
+    ) -> None:
+        """Advance the task pipeline for a single candidate."""
+        coder_task = self._find_task(
+            candidate.branch, "coder"
+        )
+        eval_task = self._find_task(
+            candidate.branch, "evaluator"
+        )
 
         if coder_task is None:
-            await self._dispatch_coder(candidate, instruction)
+            if (
+                len(self._running_asyncio_tasks)
+                < self._config.max_concurrent_tasks
+            ):
+                await self._dispatch_coder(
+                    candidate, instruction
+                )
         elif coder_task.status == TaskStatus.running:
-            pass  # Coder still running
+            pass  # Coder still running in background
         elif coder_task.status == TaskStatus.success:
             if eval_task is None:
-                await self._dispatch_evaluator(candidate)
+                if (
+                    len(self._running_asyncio_tasks)
+                    < self._config.max_concurrent_tasks
+                ):
+                    await self._dispatch_evaluator(candidate)
             elif eval_task.status == TaskStatus.success:
-                await self._finish_candidate(candidate, eval_task)
+                await self._finish_candidate(
+                    candidate, eval_task
+                )
             elif eval_task.status == TaskStatus.failed:
                 candidate.status = CandidateStatus.failed
                 error = (
@@ -283,15 +338,17 @@ class Runtime:
             return readme.read_text()
         return ""
 
-    def _get_active_candidate(self) -> Candidate | None:
-        """Return the first active or evaluating candidate."""
-        for c in self._candidates:
-            if c.status in (
+    def _get_active_candidates(self) -> list[Candidate]:
+        """Return all active or evaluating candidates."""
+        return [
+            c
+            for c in self._candidates
+            if c.status
+            in (
                 CandidateStatus.active,
                 CandidateStatus.evaluating,
-            ):
-                return c
-        return None
+            )
+        ]
 
     def _find_task(
         self, branch: str, component: str
@@ -378,12 +435,12 @@ class Runtime:
             "task.created",
             {"task_id": task.id, "component": "coder"},
         )
-        await self._execute_task(task, "coder")
+        await self._launch_task(task, "coder")
 
     async def _dispatch_evaluator(
         self, candidate: Candidate
     ) -> None:
-        """Create and execute an evaluator task."""
+        """Create and launch an evaluator task in the background."""
         candidate.status = CandidateStatus.evaluating
 
         task = Task(
@@ -405,53 +462,80 @@ class Runtime:
             "task.created",
             {"task_id": task.id, "component": "evaluator"},
         )
-        await self._execute_task(task, "evaluator")
+        await self._launch_task(task, "evaluator")
 
-    async def _execute_task(
+    async def _launch_task(
         self, task: Task, component_name: str
     ) -> None:
-        """Execute a task using the appropriate component."""
+        """Launch a task as a background asyncio.Task."""
         task.status = TaskStatus.running
         task.started_at = datetime.datetime.now(datetime.UTC)
         await self._emit(
             "task.started", {"task_id": task.id}
         )
 
-        try:
-            result = await self._run_component(
-                task, component_name
-            )
-            task.result = result
-            task.status = TaskStatus.success
-            task.completed_at = datetime.datetime.now(
-                datetime.UTC
-            )
-            self._runtime_state.total_tasks_completed += 1
+        coro = self._run_component(task, component_name)
+        handle = asyncio.create_task(
+            coro, name=f"aurelia-{task.id}"
+        )
+        self._running_asyncio_tasks[task.id] = handle
 
-            await self._emit(
-                "task.completed",
-                {
-                    "task_id": task.id,
-                    "summary": result.summary,
-                },
-            )
-        except Exception as exc:
-            task.status = TaskStatus.failed
-            task.completed_at = datetime.datetime.now(
-                datetime.UTC
-            )
-            task.result = TaskResult(
-                id=self._id_gen.next_id("result"),
-                summary="Task execution failed",
-                error=str(exc),
-            )
-            self._runtime_state.total_tasks_failed += 1
+    async def _collect_completed_tasks(self) -> None:
+        """Poll background tasks and update state for any that finished."""
+        completed_ids: list[str] = []
+        for task_id, handle in (
+            self._running_asyncio_tasks.items()
+        ):
+            if not handle.done():
+                continue
+            completed_ids.append(task_id)
 
-            await self._emit(
-                "task.failed",
-                {"task_id": task.id, "error": str(exc)},
+            task = next(
+                t for t in self._tasks if t.id == task_id
             )
-            logger.exception("Task %s failed", task.id)
+            try:
+                result = handle.result()
+                task.result = result
+                task.status = TaskStatus.success
+                task.completed_at = datetime.datetime.now(
+                    datetime.UTC
+                )
+                self._runtime_state.total_tasks_completed += 1
+
+                await self._emit(
+                    "task.completed",
+                    {
+                        "task_id": task.id,
+                        "summary": (
+                            result.summary if result else ""
+                        ),
+                    },
+                )
+            except Exception as exc:
+                task.status = TaskStatus.failed
+                task.completed_at = datetime.datetime.now(
+                    datetime.UTC
+                )
+                task.result = TaskResult(
+                    id=self._id_gen.next_id("result"),
+                    summary="Task execution failed",
+                    error=str(exc),
+                )
+                self._runtime_state.total_tasks_failed += 1
+
+                await self._emit(
+                    "task.failed",
+                    {
+                        "task_id": task.id,
+                        "error": str(exc),
+                    },
+                )
+                logger.exception(
+                    "Task %s failed", task.id
+                )
+
+        for task_id in completed_ids:
+            del self._running_asyncio_tasks[task_id]
 
     async def _run_component(
         self, task: Task, component_name: str
@@ -618,8 +702,11 @@ class Runtime:
         """Check if the runtime should stop creating candidates.
 
         Returns a reason string when termination is warranted,
-        or None to continue.
+        or None to continue.  Never terminates while background
+        tasks are still running.
         """
+        if self._running_asyncio_tasks:
+            return None
         # Check metric-based termination
         if self._config.termination_condition:
             for ev in self._evaluations:
@@ -691,6 +778,133 @@ class Runtime:
         await self._state_store.save_evaluations(
             self._evaluations
         )
+
+    # -- Crash recovery ---------------------------------------------------
+
+    async def _recover_from_crash(self) -> None:
+        """Detect and recover from a previous unclean shutdown."""
+        pid_path = self._aurelia_dir / "state" / "pid"
+
+        # 1. Check for stale PID file
+        if pid_path.exists():
+            old_pid_str = pid_path.read_text().strip()
+            try:
+                old_pid = int(old_pid_str)
+                os.kill(old_pid, 0)
+                # Process is still running
+                msg = (
+                    f"Another Aurelia instance is running"
+                    f" (pid={old_pid}). Remove {pid_path}"
+                    f" manually if this is stale."
+                )
+                raise RuntimeError(msg)
+            except (
+                ValueError,
+                ProcessLookupError,
+                PermissionError,
+            ):
+                logger.warning(
+                    "Detected stale PID file (pid=%s);"
+                    " recovering",
+                    old_pid_str,
+                )
+                pid_path.unlink(missing_ok=True)
+
+        # 2. Mark interrupted tasks as failed
+        recovered_count = 0
+        for task in self._tasks:
+            if task.status == TaskStatus.running:
+                task.status = TaskStatus.failed
+                task.completed_at = datetime.datetime.now(
+                    datetime.UTC
+                )
+                task.result = TaskResult(
+                    id=self._id_gen.next_id("result"),
+                    summary="Task interrupted by crash",
+                    error="runtime_crash_recovery",
+                )
+                self._runtime_state.total_tasks_failed += 1
+                recovered_count += 1
+
+        # 3. Mark interrupted candidates as failed
+        for candidate in self._candidates:
+            if candidate.status in (
+                CandidateStatus.active,
+                CandidateStatus.evaluating,
+            ):
+                coder = self._find_task(
+                    candidate.branch, "coder"
+                )
+                evalu = self._find_task(
+                    candidate.branch, "evaluator"
+                )
+                had_crash = (
+                    coder is not None
+                    and coder.result is not None
+                    and coder.result.error
+                    == "runtime_crash_recovery"
+                ) or (
+                    evalu is not None
+                    and evalu.result is not None
+                    and evalu.result.error
+                    == "runtime_crash_recovery"
+                )
+                if had_crash:
+                    candidate.status = (
+                        CandidateStatus.failed
+                    )
+
+        # 4. Clean up orphaned worktrees
+        try:
+            active_worktrees = (
+                await self._worktrees.list_active()
+            )
+            active_branches = {
+                c.branch
+                for c in self._candidates
+                if c.status
+                in (
+                    CandidateStatus.active,
+                    CandidateStatus.evaluating,
+                )
+            }
+            for branch, _path in active_worktrees:
+                if (
+                    branch.startswith("aurelia/")
+                    and branch not in active_branches
+                ):
+                    try:
+                        await self._worktrees.remove(
+                            branch
+                        )
+                        logger.info(
+                            "Cleaned up orphaned worktree:"
+                            " %s",
+                            branch,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to clean orphaned"
+                            " worktree: %s",
+                            branch,
+                        )
+        except Exception:
+            logger.warning(
+                "Could not enumerate worktrees"
+                " for cleanup"
+            )
+
+        if recovered_count > 0:
+            logger.warning(
+                "Crash recovery: marked %d interrupted"
+                " tasks as failed",
+                recovered_count,
+            )
+            await self._emit(
+                "runtime.recovered",
+                {"tasks_recovered": recovered_count},
+            )
+            await self._persist_state()
 
     # -- Signal handling --------------------------------------------------
 
