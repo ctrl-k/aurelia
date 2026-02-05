@@ -40,7 +40,8 @@ def start(mock: bool, project_dir: Path) -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    runtime = Runtime(project_dir=project_dir, use_mock=mock)
+    # Resolve to absolute path to avoid path duplication in git operations
+    runtime = Runtime(project_dir=project_dir.resolve(), use_mock=mock)
     asyncio.run(runtime.start())
 
 
@@ -56,6 +57,7 @@ def stop(project_dir: Path) -> None:
     import os
     import signal
 
+    project_dir = project_dir.resolve()
     pid_file = project_dir / ".aurelia" / "state" / "pid"
     if not pid_file.exists():
         click.echo("No PID file found — is the runtime running?")
@@ -83,6 +85,7 @@ def status(project_dir: Path) -> None:
     """Show runtime status."""
     import json
 
+    project_dir = project_dir.resolve()
     state_dir = project_dir / ".aurelia" / "state"
     if not state_dir.exists():
         click.echo("No state directory found — has the runtime been started?")
@@ -124,7 +127,7 @@ def monitor(project_dir: Path, poll_interval: float) -> None:
     """Open the live monitoring dashboard."""
     from aurelia.monitor import run_monitor
 
-    run_monitor(project_dir, poll_interval)
+    run_monitor(project_dir.resolve(), poll_interval)
 
 
 @cli.command()
@@ -138,4 +141,4 @@ def report(project_dir: Path) -> None:
     """Generate a summary report of the last run."""
     from aurelia.cli.report_cmd import run_report
 
-    run_report(project_dir)
+    run_report(project_dir.resolve())

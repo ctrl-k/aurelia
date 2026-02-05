@@ -2,7 +2,9 @@ import json
 import math
 import random
 import time
+
 from solution import sqrt
+
 
 def evaluate():
     random.seed(42)

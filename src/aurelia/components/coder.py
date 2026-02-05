@@ -149,10 +149,25 @@ class CoderComponent(BaseComponent):
                 {"task_id": task.id, "summary": summary[:200] if summary else ""},
             )
 
+            # Extract token metrics for runtime tracking
+            metrics: dict[str, float] = {}
+            if stats:
+                if "total_tokens" in stats:
+                    metrics["tokens_total"] = float(stats["total_tokens"])
+                if "input_tokens" in stats:
+                    metrics["tokens_input"] = float(stats["input_tokens"])
+                if "output_tokens" in stats:
+                    metrics["tokens_output"] = float(stats["output_tokens"])
+                if "duration_ms" in stats:
+                    metrics["duration_ms"] = float(stats["duration_ms"])
+                if "tool_calls" in stats:
+                    metrics["tool_calls"] = float(stats["tool_calls"])
+
             return TaskResult(
                 id=self._id_gen.next_id("result"),
                 summary=summary or "Coder completed (no response text)",
                 artifacts=[str(transcript_path)],
+                metrics=metrics,
             )
 
         finally:

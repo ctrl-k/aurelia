@@ -115,13 +115,10 @@ class Runtime:
         self._tool_registry = ToolRegistry()
         await self._tool_registry.register_builtin()
 
-        # 6. LLM client
+        # 6. LLM client (used by planner; coder uses Gemini CLI directly)
+        self._llm_client = MockLLMClient()
         if self._use_mock:
-            self._llm_client = MockLLMClient()
-        else:
-            # Phase 1b only supports mock
-            logger.warning("No real LLM provider configured; using mock client")
-            self._llm_client = MockLLMClient()
+            logger.info("Running with mock LLM client")
 
         # 7. Initialize dispatcher
         self._dispatcher = await self._create_dispatcher()
@@ -591,6 +588,11 @@ class Runtime:
                 task.status = TaskStatus.success
                 task.completed_at = datetime.datetime.now(datetime.UTC)
                 self._runtime_state.total_tasks_completed += 1
+
+                # Aggregate token usage from coder tasks
+                if result and result.metrics:
+                    tokens = result.metrics.get("tokens_total", 0)
+                    self._runtime_state.total_tokens_used += int(tokens)
 
                 await self._emit(
                     "task.completed",
