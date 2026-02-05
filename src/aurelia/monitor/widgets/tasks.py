@@ -4,14 +4,20 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import DataTable, Static
 
 from aurelia.core.models import Task, TaskStatus
+from aurelia.monitor.widgets.task_detail import TaskDetailModal
 
 
 class TasksPane(Vertical):
     """Left sidebar showing running and pending tasks."""
+
+    BINDINGS = [
+        Binding("enter", "show_detail", "Details", show=True),
+    ]
 
     DEFAULT_CSS = """
     TasksPane {
@@ -29,11 +35,23 @@ class TasksPane(Vertical):
     TasksPane DataTable {
         height: 1fr;
     }
+
+    TasksPane .hint-text {
+        text-align: center;
+        color: $text-muted;
+        padding: 0 0 1 0;
+    }
     """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._tasks: list[Task] = []
+        self._task_id_to_row: dict[str, int] = {}
 
     def compose(self):
         """Compose the pane layout."""
         yield Static("[bold]Tasks[/]", classes="pane-title")
+        yield Static("[dim]Press Enter for details[/]", classes="hint-text")
         yield DataTable(id="tasks-table", cursor_type="row")
 
     def on_mount(self) -> None:
@@ -43,6 +61,9 @@ class TasksPane(Vertical):
 
     def update_tasks(self, tasks: list[Task]) -> None:
         """Update the tasks table with current tasks."""
+        self._tasks = tasks
+        self._task_id_to_row.clear()
+
         table = self.query_one("#tasks-table", DataTable)
         table.clear()
 
@@ -60,7 +81,8 @@ class TasksPane(Vertical):
         sorted_tasks = sorted(tasks, key=sort_key)
 
         # Show last 25 tasks
-        for task in sorted_tasks[-25:]:
+        display_tasks = sorted_tasks[-25:]
+        for row_idx, task in enumerate(display_tasks):
             status_style = self._get_status_style(task.status)
             status_icon = self._get_status_icon(task.status)
             duration = self._format_duration(task)
@@ -74,6 +96,26 @@ class TasksPane(Vertical):
                 f"{status_style}{status_icon}[/]",
                 duration,
             )
+            self._task_id_to_row[task.id] = row_idx
+
+    def action_show_detail(self) -> None:
+        """Show detail modal for the selected task."""
+        table = self.query_one("#tasks-table", DataTable)
+        if table.cursor_row is None:
+            return
+
+        # Find the task for this row
+        # The row index corresponds to the display order
+        display_tasks = sorted(self._tasks, key=lambda t: (
+            {TaskStatus.running: 0, TaskStatus.pending: 1,
+             TaskStatus.success: 2, TaskStatus.failed: 2,
+             TaskStatus.cancelled: 3}.get(t.status, 4),
+            t.created_at
+        ))[-25:]
+
+        if 0 <= table.cursor_row < len(display_tasks):
+            task = display_tasks[table.cursor_row]
+            self.app.push_screen(TaskDetailModal(task))
 
     def _get_status_style(self, status: TaskStatus) -> str:
         """Get rich markup style for status."""

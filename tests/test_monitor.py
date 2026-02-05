@@ -322,3 +322,108 @@ class TestMonitorApp:
 
         app = MonitorApp(tmp_path, poll_interval=5.0)
         assert app._poll_interval == 5.0
+
+
+class TestModalWidgets:
+    """Tests for detail modal widgets."""
+
+    def test_task_detail_modal_imports(self):
+        """Test TaskDetailModal can be imported."""
+        from aurelia.monitor.widgets.task_detail import TaskDetailModal
+
+        assert TaskDetailModal is not None
+
+    def test_task_detail_modal_instantiates(self):
+        """Test TaskDetailModal can be instantiated with a task."""
+        from aurelia.monitor.widgets.task_detail import TaskDetailModal
+
+        task = Task(
+            id="task-0001",
+            thread_id="task-0001",
+            component="coder",
+            branch="aurelia/cand-0001",
+            instruction="Improve the code",
+            status=TaskStatus.running,
+            context={},
+            created_at=datetime.now(UTC),
+        )
+        modal = TaskDetailModal(task)
+        assert modal._task == task
+
+    def test_candidate_detail_modal_imports(self):
+        """Test CandidateDetailModal can be imported."""
+        from aurelia.monitor.widgets.candidate_detail import CandidateDetailModal
+
+        assert CandidateDetailModal is not None
+
+    def test_candidate_detail_modal_instantiates(self):
+        """Test CandidateDetailModal can be instantiated."""
+        from aurelia.core.models import Evaluation
+        from aurelia.monitor.widgets.candidate_detail import CandidateDetailModal
+
+        candidate = Candidate(
+            id="cand-0001",
+            branch="aurelia/cand-0001",
+            status=CandidateStatus.active,
+            created_at=datetime.now(UTC),
+        )
+        evaluations = [
+            Evaluation(
+                id="eval-0001",
+                task_id="task-0001",
+                candidate_branch="aurelia/cand-0001",
+                commit_sha="abc123",
+                metrics={"accuracy": 0.95},
+                raw_output="",
+                timestamp=datetime.now(UTC),
+                passed=True,
+            )
+        ]
+        modal = CandidateDetailModal(candidate, evaluations)
+        assert modal._candidate == candidate
+        assert len(modal._evaluations) == 1
+
+    def test_candidate_detail_modal_filters_evaluations(self):
+        """Test CandidateDetailModal filters evaluations by branch."""
+        from aurelia.core.models import Evaluation
+        from aurelia.monitor.widgets.candidate_detail import CandidateDetailModal
+
+        candidate = Candidate(
+            id="cand-0001",
+            branch="aurelia/cand-0001",
+            status=CandidateStatus.active,
+            created_at=datetime.now(UTC),
+        )
+        evaluations = [
+            Evaluation(
+                id="eval-0001",
+                task_id="task-0001",
+                candidate_branch="aurelia/cand-0001",
+                commit_sha="abc123",
+                metrics={"accuracy": 0.95},
+                raw_output="",
+                timestamp=datetime.now(UTC),
+                passed=True,
+            ),
+            Evaluation(
+                id="eval-0002",
+                task_id="task-0002",
+                candidate_branch="aurelia/cand-0002",  # Different branch
+                commit_sha="def456",
+                metrics={"accuracy": 0.85},
+                raw_output="",
+                timestamp=datetime.now(UTC),
+                passed=False,
+            ),
+        ]
+        modal = CandidateDetailModal(candidate, evaluations)
+        # Should only include eval for cand-0001
+        assert len(modal._evaluations) == 1
+        assert modal._evaluations[0].id == "eval-0001"
+
+    def test_widgets_export_from_init(self):
+        """Test that modals are exported from widgets __init__."""
+        from aurelia.monitor.widgets import CandidateDetailModal, TaskDetailModal
+
+        assert TaskDetailModal is not None
+        assert CandidateDetailModal is not None

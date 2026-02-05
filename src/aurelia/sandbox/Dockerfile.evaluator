@@ -1,0 +1,15 @@
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pixi
+RUN curl -fsSL https://pixi.sh/install.sh | bash
+ENV PATH="/root/.pixi/bin:$PATH"
+
+RUN useradd -m -s /bin/bash evaluator
+USER evaluator
+ENV PATH="/home/evaluator/.pixi/bin:$PATH"
+WORKDIR /workspace

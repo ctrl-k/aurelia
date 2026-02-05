@@ -83,7 +83,7 @@ accuracy (mean absolute error vs `math.sqrt`) and speed.
 aurelia init                  Initialize .aurelia/ in the current directory
 aurelia start [--mock]        Start the runtime (--mock uses a fake LLM)
 aurelia stop                  Send SIGTERM to a running runtime
-aurelia status                Print runtime state summary
+aurelia status                Print runtime state (tasks, tokens, cost)
 aurelia monitor               Open real-time TUI dashboard
 aurelia report                View the latest progress report
 ```
@@ -99,7 +99,21 @@ runtime:
   termination_condition: "accuracy>=0.95"   # stop when this metric is reached
   candidate_abandon_threshold: 3            # stop after this many failures
   dispatcher: "default"                     # "default" or "planner"
+  task_timeout_s: 600                       # cancel tasks after 10 minutes
+  heartbeat_stale_threshold_s: 120          # warn if task silent for 2 minutes
 ```
+
+## Production features
+
+- **Crash recovery**: On restart, Aurelia detects interrupted tasks using both
+  state files and the append-only event log, marks them as failed, and resumes.
+- **Task timeouts**: Long-running tasks are automatically cancelled after
+  `task_timeout_s` (default: 10 minutes). Stale tasks trigger warnings after
+  `heartbeat_stale_threshold_s`.
+- **Cost tracking**: Token usage and estimated API costs are tracked and
+  displayed in `aurelia status` and the TUI monitor.
+- **Sandboxed execution**: The coder runs inside Docker containers. The
+  evaluator can optionally be sandboxed by providing a `SandboxConfig`.
 
 ## Development
 
@@ -115,12 +129,12 @@ pixi run typecheck  # run pyright
 ```
 src/aurelia/
   cli/           CLI entry point and init wizard
-  core/          Models, config, event log, state store, ID generator, runtime
+  core/          Models, config, event log, state store, ID generator, runtime, pricing
   components/    Base component engine, coder, evaluator, planner, presubmit, prompt templates
   dispatch/      Dispatcher protocol, DefaultDispatcher, PlannerDispatcher
   monitor/       Real-time Textual TUI dashboard
   llm/           LLM client protocol, mock client, response cache
   git/           Async git operations and worktree management
-  sandbox/       Docker client, Dockerfile for containerised code agents
+  sandbox/       Docker client, Dockerfiles for containerised agents
   tools/         MCP tool server (read_file, write_file, run_command) and registry
 ```

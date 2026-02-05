@@ -38,11 +38,24 @@ from aurelia.core.models import (
     TaskResult,
     TaskStatus,
 )
+from aurelia.core.pricing import estimate_cost
 from aurelia.core.state import StateStore
 from aurelia.dispatch.base import DefaultDispatcher, DispatchContext, Dispatcher
 from aurelia.git.repo import GitRepo
 from aurelia.git.worktree import WorktreeManager
 from aurelia.llm.client import LLMClient, MockLLMClient
+from aurelia.metrics import (
+    CANDIDATES_TOTAL,
+    COST_TOTAL,
+    EVALUATION_SCORE,
+    HEARTBEAT_COUNT,
+    LAST_HEARTBEAT,
+    RUNNING_TASKS,
+    RUNTIME_STATUS,
+    TASK_DURATION,
+    TASKS_TOTAL,
+    TOKENS_TOTAL,
+)
 from aurelia.sandbox.docker import DockerClient
 from aurelia.tools.registry import ToolRegistry
 
@@ -141,6 +154,9 @@ class Runtime:
         await self._emit("runtime.started", {"pid": os.getpid()})
         await self._persist_state()
 
+        # 11. Update Prometheus metrics
+        RUNTIME_STATUS.set(1)
+
         logger.info("Aurelia runtime started (pid=%d)", os.getpid())
 
         try:
@@ -164,6 +180,10 @@ class Runtime:
             self._runtime_state.stopped_at = datetime.datetime.now(datetime.UTC)
             await self._emit("runtime.stopped", {})
             await self._persist_state()
+
+            # Update Prometheus metrics
+            RUNTIME_STATUS.set(0)
+            RUNNING_TASKS.set(0)
 
             pid_path.unlink(missing_ok=True)
             logger.info("Aurelia runtime stopped")
@@ -234,6 +254,11 @@ class Runtime:
         now = datetime.datetime.now(datetime.UTC)
         self._runtime_state.last_heartbeat_at = now
 
+        # Update Prometheus metrics
+        HEARTBEAT_COUNT.set(self._runtime_state.heartbeat_count)
+        LAST_HEARTBEAT.set(now.timestamp())
+        RUNNING_TASKS.set(len(self._running_asyncio_tasks))
+
         await self._emit(
             "heartbeat",
             {"count": self._runtime_state.heartbeat_count},
@@ -241,6 +266,9 @@ class Runtime:
 
         # 1. Collect completed background tasks
         await self._collect_completed_tasks()
+
+        # 2. Check for timed-out tasks
+        await self._check_task_timeouts()
 
         # 3. Advance pipeline for each active candidate
         for candidate in self._get_active_candidates():
@@ -565,8 +593,10 @@ class Runtime:
 
     async def _launch_task(self, task: Task, component_name: str) -> None:
         """Launch a task as a background asyncio.Task."""
+        now = datetime.datetime.now(datetime.UTC)
         task.status = TaskStatus.running
-        task.started_at = datetime.datetime.now(datetime.UTC)
+        task.started_at = now
+        task.last_heartbeat = now  # Initialize heartbeat for timeout tracking
         await self._emit("task.started", {"task_id": task.id})
 
         coro = self._run_component(task, component_name)
@@ -589,10 +619,29 @@ class Runtime:
                 task.completed_at = datetime.datetime.now(datetime.UTC)
                 self._runtime_state.total_tasks_completed += 1
 
-                # Aggregate token usage from coder tasks
+                # Update Prometheus metrics
+                TASKS_TOTAL.labels(component=task.component, status="success").inc()
+                if task.started_at:
+                    duration = (task.completed_at - task.started_at).total_seconds()
+                    TASK_DURATION.labels(component=task.component).observe(duration)
+
+                # Aggregate token usage and cost from coder tasks
                 if result and result.metrics:
-                    tokens = result.metrics.get("tokens_total", 0)
-                    self._runtime_state.total_tokens_used += int(tokens)
+                    input_tokens = int(result.metrics.get("tokens_input", 0))
+                    output_tokens = int(result.metrics.get("tokens_output", 0))
+                    total_tokens = int(result.metrics.get("tokens_total", 0))
+
+                    self._runtime_state.total_tokens_used += total_tokens
+                    cost = estimate_cost(
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                    )
+                    self._runtime_state.total_cost_usd += cost
+
+                    # Update Prometheus metrics
+                    TOKENS_TOTAL.labels(type="input").inc(input_tokens)
+                    TOKENS_TOTAL.labels(type="output").inc(output_tokens)
+                    COST_TOTAL.inc(cost)
 
                 await self._emit(
                     "task.completed",
@@ -611,6 +660,12 @@ class Runtime:
                 )
                 self._runtime_state.total_tasks_failed += 1
 
+                # Update Prometheus metrics
+                TASKS_TOTAL.labels(component=task.component, status="failed").inc()
+                if task.started_at:
+                    duration = (task.completed_at - task.started_at).total_seconds()
+                    TASK_DURATION.labels(component=task.component).observe(duration)
+
                 await self._emit(
                     "task.failed",
                     {
@@ -622,6 +677,73 @@ class Runtime:
 
         for task_id in completed_ids:
             del self._running_asyncio_tasks[task_id]
+
+    async def _check_task_timeouts(self) -> None:
+        """Check for stale/timed-out tasks and cancel them."""
+        now = datetime.datetime.now(datetime.UTC)
+        timeout_s = self._config.task_timeout_s
+        stale_threshold_s = self._config.heartbeat_stale_threshold_s
+
+        for task in self._tasks:
+            if task.status != TaskStatus.running:
+                continue
+
+            # Check both started_at (if no heartbeat yet) and last_heartbeat
+            reference_time = task.last_heartbeat or task.started_at
+            if reference_time is None:
+                continue
+
+            elapsed = (now - reference_time).total_seconds()
+
+            if elapsed > timeout_s:
+                # Task has timed out - cancel it
+                logger.error(
+                    "Task %s timed out after %.0fs (threshold: %ds)",
+                    task.id,
+                    elapsed,
+                    timeout_s,
+                )
+                await self._timeout_task(task)
+            elif elapsed > stale_threshold_s:
+                # Task heartbeat is stale - log warning
+                logger.warning(
+                    "Task %s heartbeat stale (%.0fs since last activity)",
+                    task.id,
+                    elapsed,
+                )
+
+    async def _timeout_task(self, task: Task) -> None:
+        """Cancel a timed-out task."""
+        # Cancel the asyncio task if it's still running
+        handle = self._running_asyncio_tasks.get(task.id)
+        if handle and not handle.done():
+            handle.cancel()
+            try:
+                await handle
+            except asyncio.CancelledError:
+                pass
+
+        # Mark task as failed
+        task.status = TaskStatus.failed
+        task.completed_at = datetime.datetime.now(datetime.UTC)
+        task.result = TaskResult(
+            id=self._id_gen.next_id("result"),
+            summary="Task timed out",
+            error=f"Task exceeded timeout of {self._config.task_timeout_s}s",
+        )
+        self._runtime_state.total_tasks_failed += 1
+
+        # Clean up tracking
+        if task.id in self._running_asyncio_tasks:
+            del self._running_asyncio_tasks[task.id]
+
+        await self._emit(
+            "task.timeout",
+            {
+                "task_id": task.id,
+                "timeout_s": self._config.task_timeout_s,
+            },
+        )
 
     async def _run_component(self, task: Task, component_name: str) -> TaskResult:
         """Instantiate and run the named component."""
@@ -692,6 +814,13 @@ class Runtime:
         self._evaluations.append(evaluation)
         candidate.evaluations.append(evaluation.id)
         candidate.status = CandidateStatus.succeeded if passed else CandidateStatus.failed
+
+        # Update Prometheus metrics
+        status = "succeeded" if passed else "failed"
+        CANDIDATES_TOTAL.labels(status=status).inc()
+        for metric_name, metric_value in metrics.items():
+            if isinstance(metric_value, (int, float)):
+                EVALUATION_SCORE.labels(metric=metric_name).set(metric_value)
 
         await self._emit(
             "candidate.evaluated",
@@ -862,10 +991,39 @@ class Runtime:
                 )
                 pid_path.unlink(missing_ok=True)
 
+        # 1b. Use event log to find unmatched task.started events
+        # This provides additional verification beyond task status
+        unmatched_started = await self._event_log.find_unmatched(
+            start_type="task.started",
+            end_type="task.completed",
+        )
+        unmatched_failed = await self._event_log.find_unmatched(
+            start_type="task.started",
+            end_type="task.failed",
+        )
+        unmatched_timeout = await self._event_log.find_unmatched(
+            start_type="task.started",
+            end_type="task.timeout",
+        )
+
+        # Find task IDs that were started but never ended
+        started_ids = {e.data["task_id"] for e in unmatched_started}
+        failed_ids = {e.data["task_id"] for e in unmatched_failed}
+        timeout_ids = {e.data["task_id"] for e in unmatched_timeout}
+        orphaned_task_ids = started_ids - failed_ids - timeout_ids
+
+        if orphaned_task_ids:
+            logger.warning(
+                "Event log shows %d tasks started but never completed: %s",
+                len(orphaned_task_ids),
+                list(orphaned_task_ids)[:5],  # Show first 5
+            )
+
         # 2. Mark interrupted tasks as failed
         recovered_count = 0
         for task in self._tasks:
-            if task.status == TaskStatus.running:
+            # Check both status-based and event-log-based detection
+            if task.status == TaskStatus.running or task.id in orphaned_task_ids:
                 task.status = TaskStatus.failed
                 task.completed_at = datetime.datetime.now(datetime.UTC)
                 task.result = TaskResult(

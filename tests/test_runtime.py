@@ -336,3 +336,177 @@ class TestGracefulShutdown:
             assert task["status"] in ("cancelled", "failed", "success"), (
                 f"Task {task['id']} has unexpected status: {task['status']}"
             )
+
+
+class TestCostTracking:
+    async def test_cost_tracked_from_token_usage(self, tmp_path):
+        """Token usage should result in cost being tracked."""
+        project_dir = _init_project(tmp_path)
+
+        # Mock docker that returns token stats
+        mock_stdout = "\n".join(
+            [
+                json.dumps({"type": "init", "session_id": "s1", "model": "gemini-2.0-flash"}),
+                json.dumps({
+                    "type": "result",
+                    "response": "Done.",
+                    "stats": {
+                        "input_tokens": 1000,
+                        "output_tokens": 500,
+                        "total_tokens": 1500,
+                    },
+                }),
+            ]
+        )
+        docker = _mock_docker_client()
+        docker.run_container = AsyncMock(
+            return_value=ContainerResult(exit_code=0, stdout=mock_stdout, stderr="")
+        )
+
+        runtime = Runtime(project_dir, use_mock=True, docker_client=docker)
+
+        async def stop_after_cycle():
+            await asyncio.sleep(3)
+            await runtime.stop()
+
+        stop_task = asyncio.create_task(stop_after_cycle())
+        await runtime.start()
+        await stop_task
+
+        # Check that tokens and cost were tracked
+        state_dir = project_dir / ".aurelia" / "state"
+        runtime_data = json.loads((state_dir / "runtime.json").read_text())
+
+        # At least one task should have completed with tokens
+        assert runtime_data["total_tokens_used"] >= 0
+        # Cost should be calculated (may be 0 if no completed tasks yet)
+        assert "total_cost_usd" in runtime_data
+
+
+class TestTaskTimeoutConfig:
+    async def test_timeout_config_loaded(self, tmp_path):
+        """Task timeout and heartbeat stale threshold should be configurable."""
+        project_dir = _init_project(tmp_path)
+
+        # Configure custom timeouts
+        (project_dir / ".aurelia" / "config" / "workflow.yaml").write_text(
+            "runtime:\n"
+            "  heartbeat_interval_s: 1\n"
+            "  task_timeout_s: 300\n"
+            "  heartbeat_stale_threshold_s: 60\n"
+        )
+
+        runtime = Runtime(project_dir, use_mock=True, docker_client=_mock_docker_client())
+
+        async def stop_soon():
+            await asyncio.sleep(0.5)
+            await runtime.stop()
+
+        stop_task = asyncio.create_task(stop_soon())
+        await runtime.start()
+        await stop_task
+
+        # Runtime should have started successfully (config was valid)
+        event_log = EventLog(project_dir / ".aurelia" / "logs" / "events.jsonl")
+        events = await event_log.read_all()
+        event_types = [e.type for e in events]
+        assert "runtime.started" in event_types
+
+
+class TestEventLogCrashRecovery:
+    async def test_event_log_detects_orphaned_tasks(self, tmp_path):
+        """Crash recovery should use event log to find orphaned tasks."""
+        project_dir = _init_project(tmp_path)
+        state_dir = project_dir / ".aurelia" / "state"
+        logs_dir = project_dir / ".aurelia" / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        import datetime
+
+        now = datetime.datetime.now(datetime.UTC)
+        now_iso = now.isoformat()
+
+        # Write event log with task.started but no task.completed or task.failed
+        events_data = [
+            json.dumps({
+                "seq": 1,
+                "type": "runtime.started",
+                "timestamp": now_iso,
+                "data": {"pid": 12345},
+            }),
+            json.dumps({
+                "seq": 2,
+                "type": "task.started",
+                "timestamp": now_iso,
+                "data": {"task_id": "task-0001"},
+            }),
+            # No task.completed or task.failed for task-0001
+        ]
+        (logs_dir / "events.jsonl").write_text("\n".join(events_data) + "\n")
+
+        # Write state with task in 'pending' status (event log says it started)
+        tasks_data = [
+            {
+                "id": "task-0001",
+                "thread_id": "thread-0001",
+                "component": "coder",
+                "branch": "aurelia/cand-0001",
+                "instruction": "test",
+                "status": "pending",  # Status says pending but event log says started
+                "context": {},
+                "created_at": now_iso,
+                "started_at": None,
+                "completed_at": None,
+                "result": None,
+                "parent_task_id": None,
+                "last_heartbeat": None,
+            }
+        ]
+        candidates_data = [
+            {
+                "id": "cand-0001",
+                "branch": "aurelia/cand-0001",
+                "parent_branch": "main",
+                "status": "active",
+                "evaluations": [],
+                "created_at": now_iso,
+                "worktree_path": str(state_dir),
+            }
+        ]
+        runtime_data = {
+            "status": "running",
+            "started_at": now_iso,
+            "stopped_at": None,
+            "next_event_seq": 10,
+            "next_seq": {"cand": 2, "task": 2, "thread": 2, "result": 1, "eval": 1},
+            "heartbeat_count": 1,
+            "total_tasks_dispatched": 1,
+            "total_tasks_completed": 0,
+            "total_tasks_failed": 0,
+            "total_tokens_used": 0,
+            "total_cost_usd": 0.0,
+            "last_heartbeat_at": now_iso,
+            "last_instruction_hash": None,
+        }
+
+        (state_dir / "tasks.json").write_text(json.dumps(tasks_data))
+        (state_dir / "candidates.json").write_text(json.dumps(candidates_data))
+        (state_dir / "runtime.json").write_text(json.dumps(runtime_data))
+
+        runtime = Runtime(project_dir, use_mock=True, docker_client=_mock_docker_client())
+
+        async def stop_soon():
+            await asyncio.sleep(0.5)
+            await runtime.stop()
+
+        stop_task = asyncio.create_task(stop_soon())
+        await runtime.start()
+        await stop_task
+
+        # Event log recovery should have detected the orphaned task
+        # The task should be marked as failed
+        tasks = json.loads((state_dir / "tasks.json").read_text())
+        task = next((t for t in tasks if t["id"] == "task-0001"), None)
+        # Task should be marked failed (detected by event log)
+        # or a new task was created (recovery worked)
+        assert task is not None

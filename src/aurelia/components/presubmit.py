@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+import os
+import signal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -44,6 +46,18 @@ class PresubmitComponent:
         )
         await self._event_log.append(event)
 
+    def _kill_process_group(self, pid: int) -> None:
+        """Kill a process group, first with SIGTERM then SIGKILL."""
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            return
+        # Give processes a moment to terminate gracefully
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
     async def execute(self, task: Task) -> TaskResult:
         """Run presubmit checks in the candidate worktree.
 
@@ -68,19 +82,21 @@ class PresubmitComponent:
         outputs: list[str] = []
 
         for check in checks:
+            proc = await asyncio.create_subprocess_shell(
+                check,
+                cwd=worktree_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,  # Create new process group for cleanup
+            )
             try:
-                proc = await asyncio.create_subprocess_shell(
-                    check,
-                    cwd=worktree_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
                     proc.communicate(), timeout=_TIMEOUT_S
                 )
-            except TimeoutError:
-                proc.kill()  # type: ignore[union-attr]
-                await proc.wait()  # type: ignore[union-attr]
+            except (TimeoutError, asyncio.CancelledError):
+                # Kill the entire process group to clean up all children
+                self._kill_process_group(proc.pid)
+                await proc.wait()
                 error_msg = f"Check '{check}' timed out after {_TIMEOUT_S}s"
                 result = TaskResult(
                     id=result_id,

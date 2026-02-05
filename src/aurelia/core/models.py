@@ -194,6 +194,8 @@ class RuntimeConfig(BaseModel):
     report_interval_heartbeats: int = 5
     token_budget: int | None = None
     heartbeat_file: str = "HEARTBEAT.md"
+    task_timeout_s: int = 600  # 10 minutes default
+    heartbeat_stale_threshold_s: int = 120  # 2 minutes - warn if stale
 
 
 class RuntimeState(BaseModel):

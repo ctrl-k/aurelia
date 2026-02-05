@@ -29,17 +29,28 @@ def init() -> None:
     default=Path.cwd,
     help="Project root directory.",
 )
-def start(mock: bool, project_dir: Path) -> None:
+@click.option("--json-logs", is_flag=True, default=False, help="Output logs as JSON.")
+@click.option(
+    "--metrics-port",
+    type=int,
+    default=0,
+    help="Prometheus metrics port (0=disabled).",
+)
+def start(mock: bool, project_dir: Path, json_logs: bool, metrics_port: int) -> None:
     """Start the Aurelia runtime."""
     import asyncio
-    import logging
 
+    from aurelia.core.logging import configure_logging
     from aurelia.core.runtime import Runtime
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    configure_logging(json_output=json_logs)
+
+    # Start Prometheus metrics server if requested
+    if metrics_port > 0:
+        from aurelia.metrics.server import start_metrics_server
+
+        start_metrics_server(metrics_port)
+
     # Resolve to absolute path to avoid path duplication in git operations
     runtime = Runtime(project_dir=project_dir.resolve(), use_mock=mock)
     asyncio.run(runtime.start())
@@ -102,6 +113,8 @@ def status(project_dir: Path) -> None:
     click.echo(f"Tasks dispatched: {data.get('total_tasks_dispatched', 0)}")
     click.echo(f"Tasks completed : {data.get('total_tasks_completed', 0)}")
     click.echo(f"Tasks failed    : {data.get('total_tasks_failed', 0)}")
+    click.echo(f"Tokens used     : {data.get('total_tokens_used', 0):,}")
+    click.echo(f"Estimated cost  : ${data.get('total_cost_usd', 0.0):.4f}")
 
 
 @cli.command()
