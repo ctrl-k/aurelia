@@ -421,11 +421,10 @@ class TestPlannerDispatcherOnPlanningCompleted:
                 },
             ],
         }
-        (worktree / "plan.json").write_text(
-            __import__("json").dumps(plan_data)
-        )
+        (worktree / "plan.json").write_text(__import__("json").dumps(plan_data))
 
         from aurelia.core.models import TaskResult
+
         result = TaskResult(
             id="result-0001",
             summary="Plan complete",

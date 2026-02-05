@@ -1,3 +1,9 @@
+---
+title: Untitled
+author: ctrl
+date: 2026-02-04T23:34:49Z
+---
+
 # Aurelia
 
 Aurelia is a CLI tool that automates iterative code improvement using LLM agents.
@@ -77,6 +83,8 @@ aurelia init                  Initialize .aurelia/ in the current directory
 aurelia start [--mock]        Start the runtime (--mock uses a fake LLM)
 aurelia stop                  Send SIGTERM to a running runtime
 aurelia status                Print runtime state summary
+aurelia monitor               Open real-time TUI dashboard
+aurelia report                View the latest progress report
 ```
 
 ## Configuration
@@ -89,6 +97,7 @@ runtime:
   max_concurrent_tasks: 4
   termination_condition: "accuracy>=0.95"   # stop when this metric is reached
   candidate_abandon_threshold: 3            # stop after this many failures
+  dispatcher: "default"                     # "default" or "planner"
 ```
 
 ## Development
@@ -106,7 +115,9 @@ pixi run typecheck  # run pyright
 src/aurelia/
   cli/           CLI entry point and init wizard
   core/          Models, config, event log, state store, ID generator, runtime
-  components/    Base component engine, coder, evaluator, prompt templates
+  components/    Base component engine, coder, evaluator, planner, prompt templates
+  dispatch/      Dispatcher protocol, DefaultDispatcher, PlannerDispatcher
+  monitor/       Real-time Textual TUI dashboard
   llm/           LLM client protocol, mock client, response cache
   git/           Async git operations and worktree management
   sandbox/       Docker client, Dockerfile for containerised code agents

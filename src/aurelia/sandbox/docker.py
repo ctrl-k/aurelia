@@ -40,13 +40,9 @@ class DockerClient:
         try:
             returncode, _, stderr = await self._run("info")
             if returncode != 0:
-                raise DockerNotAvailableError(
-                    f"Docker not available: {stderr}"
-                )
+                raise DockerNotAvailableError(f"Docker not available: {stderr}")
         except FileNotFoundError:
-            raise DockerNotAvailableError(
-                "Docker CLI not found on PATH"
-            ) from None
+            raise DockerNotAvailableError("Docker CLI not found on PATH") from None
 
     async def image_exists(self, image: str) -> bool:
         """Check if a Docker image exists locally.
@@ -77,9 +73,7 @@ class DockerClient:
             timeout_s=600,  # image builds can be slow
         )
         if returncode != 0:
-            raise ImageBuildError(
-                f"Failed to build image {image_tag}: {stderr or stdout}"
-            )
+            raise ImageBuildError(f"Failed to build image {image_tag}: {stderr or stdout}")
         logger.info("Built Docker image %s", image_tag)
 
     async def run_container(
@@ -141,9 +135,7 @@ class DockerClient:
         logger.debug("Running container: docker %s", " ".join(args))
 
         try:
-            returncode, stdout_str, stderr_str = await self._run(
-                *args, timeout_s=effective_timeout
-            )
+            returncode, stdout_str, stderr_str = await self._run(*args, timeout_s=effective_timeout)
         except TimeoutError:
             return ContainerResult(
                 exit_code=-1,
@@ -157,9 +149,7 @@ class DockerClient:
             stderr=stderr_str,
         )
 
-    async def _run(
-        self, *args: str, timeout_s: int = 120
-    ) -> tuple[int, str, str]:
+    async def _run(self, *args: str, timeout_s: int = 120) -> tuple[int, str, str]:
         """Run a docker command, return (exit_code, stdout, stderr)."""
         cmd = ["docker", *args]
         logger.debug("docker command: %s", " ".join(cmd))

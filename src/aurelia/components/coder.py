@@ -119,10 +119,7 @@ class CoderComponent(BaseComponent):
             summary, stats = self._parse_transcript(result.stdout)
 
             if result.exit_code != 0:
-                error_msg = (
-                    f"Gemini CLI exited with code {result.exit_code}: "
-                    f"{result.stderr[:500]}"
-                )
+                error_msg = f"Gemini CLI exited with code {result.exit_code}: {result.stderr[:500]}"
                 await self._emit_event(
                     "coder.failed",
                     {
@@ -174,8 +171,7 @@ class CoderComponent(BaseComponent):
         attempt = task.context.get("attempt_number", 1)
         if feedback:
             previous_attempts = (
-                f"This is attempt #{attempt}. "
-                f"Learn from previous attempts:\n\n{feedback}"
+                f"This is attempt #{attempt}. Learn from previous attempts:\n\n{feedback}"
             )
         else:
             previous_attempts = "This is the first attempt."
@@ -206,14 +202,10 @@ class CoderComponent(BaseComponent):
         if await self._docker.image_exists(image):
             return
 
-        await self._emit_event(
-            "coder.image_build.started", {"image": image}
-        )
+        await self._emit_event("coder.image_build.started", {"image": image})
         logger.info("Building Docker image %s (first run)...", image)
         await self._docker.build_image(_DOCKERFILE_PATH, image)
-        await self._emit_event(
-            "coder.image_build.completed", {"image": image}
-        )
+        await self._emit_event("coder.image_build.completed", {"image": image})
 
     # ------------------------------------------------------------------
     # Transcript parsing

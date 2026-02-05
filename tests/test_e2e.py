@@ -20,9 +20,7 @@ def _init_e2e_project(tmp_path):
     (project_dir / "README.md").write_text(
         "# Test Problem\nImplement a function that adds two numbers.\n"
     )
-    (project_dir / "solution.py").write_text(
-        "def add(a, b):\n    return a + b\n"
-    )
+    (project_dir / "solution.py").write_text("def add(a, b):\n    return a + b\n")
     (project_dir / "evaluate.py").write_text(
         'import json\nprint(json.dumps({"accuracy": 0.95, "speed_ms": 5.0}))\n'
     )
@@ -42,10 +40,7 @@ def _init_e2e_project(tmp_path):
 
     # Fast heartbeat so the test completes quickly; trivial presubmit check
     (aurelia_dir / "config" / "workflow.yaml").write_text(
-        "runtime:\n"
-        "  heartbeat_interval_s: 1\n"
-        "  presubmit_checks:\n"
-        "    - \"true\"\n"
+        'runtime:\n  heartbeat_interval_s: 1\n  presubmit_checks:\n    - "true"\n'
     )
 
     git_env = {
@@ -80,11 +75,13 @@ def _init_e2e_project(tmp_path):
 
 def _mock_docker_client() -> DockerClient:
     """Create a mock DockerClient that simulates a successful Gemini CLI run."""
-    mock_stdout = "\n".join([
-        json.dumps({"type": "init", "session_id": "s1", "model": "gemini-2.5-pro"}),
-        json.dumps({"type": "message", "role": "assistant", "content": "Done."}),
-        json.dumps({"type": "result", "response": "Mock coder done.", "stats": {}}),
-    ])
+    mock_stdout = "\n".join(
+        [
+            json.dumps({"type": "init", "session_id": "s1", "model": "gemini-2.5-pro"}),
+            json.dumps({"type": "message", "role": "assistant", "content": "Done."}),
+            json.dumps({"type": "result", "response": "Mock coder done.", "stats": {}}),
+        ]
+    )
     docker = AsyncMock(spec=DockerClient)
     docker.check_available = AsyncMock()
     docker.image_exists = AsyncMock(return_value=True)
@@ -98,9 +95,7 @@ def _mock_docker_client() -> DockerClient:
 class TestFullCycleWithMock:
     async def test_full_cycle_with_mock(self, tmp_path):
         project_dir = _init_e2e_project(tmp_path)
-        runtime = Runtime(
-            project_dir, use_mock=True, docker_client=_mock_docker_client()
-        )
+        runtime = Runtime(project_dir, use_mock=True, docker_client=_mock_docker_client())
 
         async def stop_after_cycles():
             # 4 heartbeat cycles needed: dispatch coder, dispatch presubmit,
@@ -174,12 +169,10 @@ class TestTerminationOnMetricThreshold:
             "  heartbeat_interval_s: 1\n"
             '  termination_condition: "accuracy>=0.90"\n'
             "  presubmit_checks:\n"
-            "    - \"true\"\n"
+            '    - "true"\n'
         )
 
-        runtime = Runtime(
-            project_dir, use_mock=True, docker_client=_mock_docker_client()
-        )
+        runtime = Runtime(project_dir, use_mock=True, docker_client=_mock_docker_client())
 
         async def safety_stop():
             await asyncio.sleep(10)
@@ -198,7 +191,5 @@ class TestTerminationOnMetricThreshold:
 
         # Should have at least one candidate
         state_dir = project_dir / ".aurelia" / "state"
-        candidates_data = json.loads(
-            (state_dir / "candidates.json").read_text()
-        )
+        candidates_data = json.loads((state_dir / "candidates.json").read_text())
         assert len(candidates_data) >= 1

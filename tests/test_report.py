@@ -11,7 +11,11 @@ from aurelia.cli.main import cli
 
 
 def _write_state(
-    state_dir: Path, runtime: dict, candidates: list, evaluations: list, tasks: list,
+    state_dir: Path,
+    runtime: dict,
+    candidates: list,
+    evaluations: list,
+    tasks: list,
 ) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     (state_dir / "runtime.json").write_text(json.dumps(runtime))
@@ -134,8 +138,11 @@ class TestReportFailures:
         project = tmp_path / "project"
 
         runtime = {
-            "status": "stopped", "heartbeat_count": 0,
-            "total_tasks_dispatched": 1, "total_tasks_completed": 0, "total_tasks_failed": 1,
+            "status": "stopped",
+            "heartbeat_count": 0,
+            "total_tasks_dispatched": 1,
+            "total_tasks_completed": 0,
+            "total_tasks_failed": 1,
         }
         candidates = [
             {"id": "cand-0001", "status": "failed", "branch": "aurelia/cand-0001"},

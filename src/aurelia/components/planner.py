@@ -103,13 +103,9 @@ class PlannerComponent(BaseComponent):
             msg = "PlannerComponent requires a SandboxConfig"
             raise RuntimeError(msg)
 
-        worktree_path = Path(
-            task.context.get("worktree_path", str(self._project_dir))
-        )
+        worktree_path = Path(task.context.get("worktree_path", str(self._project_dir)))
 
-        await self._emit_event(
-            "planner.started", {"task_id": task.id}
-        )
+        await self._emit_event("planner.started", {"task_id": task.id})
 
         # 1. Ensure Docker image
         await self._ensure_image(sandbox.image)
@@ -117,16 +113,12 @@ class PlannerComponent(BaseComponent):
         # 2. Write context files
         planning_ctx = task.context.get("planning_context", {})
         problem_desc = task.context.get("problem_description", "")
-        context_md = self._build_context_markdown(
-            problem_desc, planning_ctx
-        )
+        context_md = self._build_context_markdown(problem_desc, planning_ctx)
         context_file = worktree_path / "_planning_context.md"
         context_file.write_text(context_md)
 
         schema_file = worktree_path / "plan_schema.json"
-        schema_file.write_text(
-            json.dumps(_PLAN_SCHEMA, indent=2)
-        )
+        schema_file.write_text(json.dumps(_PLAN_SCHEMA, indent=2))
 
         # 3. Write system prompt
         system_prompt = self._build_system_prompt(task)
@@ -141,8 +133,12 @@ class PlannerComponent(BaseComponent):
                 "Then write a plan.json file with concrete improvement items."
             )
             command = [
-                "gemini", "-y", "-p", user_prompt,
-                "--output-format", "stream-json",
+                "gemini",
+                "-y",
+                "-p",
+                user_prompt,
+                "--output-format",
+                "stream-json",
             ]
             env = {
                 "GEMINI_SYSTEM_MD": "/workspace/.gemini_system.md",
@@ -164,17 +160,14 @@ class PlannerComponent(BaseComponent):
             )
 
             # 5. Save transcript
-            transcript_dir = (
-                self._project_dir / ".aurelia" / "logs" / "transcripts"
-            )
+            transcript_dir = self._project_dir / ".aurelia" / "logs" / "transcripts"
             transcript_dir.mkdir(parents=True, exist_ok=True)
             transcript_path = transcript_dir / f"{task.id}.jsonl"
             transcript_path.write_text(result.stdout)
 
             if result.exit_code != 0:
                 error_msg = (
-                    f"Planner Gemini CLI exited with code "
-                    f"{result.exit_code}: {result.stderr[:500]}"
+                    f"Planner Gemini CLI exited with code {result.exit_code}: {result.stderr[:500]}"
                 )
                 await self._emit_event(
                     "planner.failed",
@@ -223,9 +216,7 @@ class PlannerComponent(BaseComponent):
         problem_desc = task.context.get("problem_description", "")
         return template.format(
             problem_description=problem_desc,
-            planning_context=self._build_context_markdown(
-                problem_desc, planning_ctx
-            ),
+            planning_context=self._build_context_markdown(problem_desc, planning_ctx),
             plan_schema=json.dumps(_PLAN_SCHEMA, indent=2),
         )
 
@@ -251,17 +242,14 @@ class PlannerComponent(BaseComponent):
             sections.append("# Current Plan State\n")
             for item in plan_state.get("items", []):
                 sections.append(
-                    f"- [{item.get('status', '?')}] {item.get('id')}: "
-                    f"{item.get('description', '')}"
+                    f"- [{item.get('status', '?')}] {item.get('id')}: {item.get('description', '')}"
                 )
             sections.append("")
 
         if knowledge := planning_ctx.get("knowledge_entries"):
             sections.append("# Knowledge Base\n")
             for entry in knowledge:
-                sections.append(
-                    f"- {entry.get('content', '')[:200]}"
-                )
+                sections.append(f"- {entry.get('content', '')[:200]}")
             sections.append("")
 
         return "\n".join(sections)
@@ -271,20 +259,12 @@ class PlannerComponent(BaseComponent):
         await self._docker.check_available()
         if await self._docker.image_exists(image):
             return
-        await self._emit_event(
-            "planner.image_build.started", {"image": image}
-        )
-        logger.info(
-            "Building Docker image %s (first run)...", image
-        )
+        await self._emit_event("planner.image_build.started", {"image": image})
+        logger.info("Building Docker image %s (first run)...", image)
         await self._docker.build_image(_DOCKERFILE_PATH, image)
-        await self._emit_event(
-            "planner.image_build.completed", {"image": image}
-        )
+        await self._emit_event("planner.image_build.completed", {"image": image})
 
-    async def _emit_event(
-        self, event_type: str, data: dict
-    ) -> None:
+    async def _emit_event(self, event_type: str, data: dict) -> None:
         """Emit an event to the event log."""
         await self._event_log.append(
             Event(

@@ -47,8 +47,7 @@ class GitRepo:
 
         if proc.returncode != 0:
             raise RuntimeError(
-                f"git command failed (exit {proc.returncode}): "
-                f"{' '.join(cmd)}\nstderr: {stderr}"
+                f"git command failed (exit {proc.returncode}): {' '.join(cmd)}\nstderr: {stderr}"
             )
         return stdout
 
@@ -81,9 +80,7 @@ class GitRepo:
     # Commit
     # ------------------------------------------------------------------
 
-    async def commit(
-        self, branch: str, message: str, paths: list[Path]
-    ) -> str:
+    async def commit(self, branch: str, message: str, paths: list[Path]) -> str:
         """Stage *paths*, commit on *branch*, and return the commit SHA."""
         await self._run("checkout", branch)
 
@@ -106,7 +103,10 @@ class GitRepo:
         sep = "---AURELIA_RECORD_SEP---"
         fmt = f"%H%n%an%n%aI%n%s%n{sep}"
         raw = await self._run(
-            "log", branch, f"-n{n}", f"--format={fmt}",
+            "log",
+            branch,
+            f"-n{n}",
+            f"--format={fmt}",
         )
 
         entries: list[dict[str, Any]] = []
@@ -117,12 +117,14 @@ class GitRepo:
             lines = block.splitlines()
             if len(lines) < 4:  # noqa: PLR2004
                 continue
-            entries.append({
-                "sha": lines[0],
-                "author": lines[1],
-                "date": lines[2],
-                "message": lines[3],
-            })
+            entries.append(
+                {
+                    "sha": lines[0],
+                    "author": lines[1],
+                    "date": lines[2],
+                    "message": lines[3],
+                }
+            )
         return entries
 
     # ------------------------------------------------------------------
@@ -150,7 +152,13 @@ class GitRepo:
 
         payload = json.dumps(existing, default=str)
         await self._run(
-            "notes", f"--ref={namespace}", "add", "-f", "-m", payload, commit_sha,
+            "notes",
+            f"--ref={namespace}",
+            "add",
+            "-f",
+            "-m",
+            payload,
+            commit_sha,
         )
 
     async def read_notes(
@@ -170,7 +178,10 @@ class GitRepo:
         """Return the raw JSON list stored in a git note, or ``[]``."""
         try:
             raw = await self._run(
-                "notes", f"--ref={namespace}", "show", commit_sha,
+                "notes",
+                f"--ref={namespace}",
+                "show",
+                commit_sha,
             )
         except RuntimeError:
             return []

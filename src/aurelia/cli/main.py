@@ -1,4 +1,5 @@
 """Aurelia CLI entry point."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,6 +17,7 @@ def cli() -> None:
 def init() -> None:
     """Initialize an Aurelia project in the current directory."""
     from aurelia.cli.init_cmd import run_init
+
     run_init()
 
 
@@ -106,9 +108,23 @@ def replay() -> None:
 
 
 @cli.command()
-def monitor() -> None:
+@click.option(
+    "--project-dir",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path.cwd,
+    help="Project root directory.",
+)
+@click.option(
+    "--poll-interval",
+    type=float,
+    default=2.0,
+    help="State polling interval in seconds.",
+)
+def monitor(project_dir: Path, poll_interval: float) -> None:
     """Open the live monitoring dashboard."""
-    click.echo("Not yet implemented.")
+    from aurelia.monitor import run_monitor
+
+    run_monitor(project_dir, poll_interval)
 
 
 @cli.command()
@@ -121,4 +137,5 @@ def monitor() -> None:
 def report(project_dir: Path) -> None:
     """Generate a summary report of the last run."""
     from aurelia.cli.report_cmd import run_report
+
     run_report(project_dir)

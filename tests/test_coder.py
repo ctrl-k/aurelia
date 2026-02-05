@@ -64,8 +64,7 @@ def _mock_docker(
     docker.image_exists = AsyncMock(return_value=image_exists)
     docker.build_image = AsyncMock()
     docker.run_container = AsyncMock(
-        return_value=container_result
-        or ContainerResult(exit_code=0, stdout="", stderr="")
+        return_value=container_result or ContainerResult(exit_code=0, stdout="", stderr="")
     )
     return docker
 
@@ -75,22 +74,28 @@ def _stream_json_output(response: str = "I fixed the bug.", stats: dict | None =
     lines = [
         json.dumps({"type": "init", "session_id": "sess-1", "model": "gemini-2.5-pro"}),
         json.dumps({"type": "message", "role": "user", "content": "Fix the bug"}),
-        json.dumps({
-            "type": "tool_use",
-            "name": "read_file",
-            "parameters": {"path": "/workspace/solution.py"},
-        }),
-        json.dumps({
-            "type": "tool_result",
-            "name": "read_file",
-            "result": "def sqrt(n):\n    return n**0.5\n",
-        }),
+        json.dumps(
+            {
+                "type": "tool_use",
+                "name": "read_file",
+                "parameters": {"path": "/workspace/solution.py"},
+            }
+        ),
+        json.dumps(
+            {
+                "type": "tool_result",
+                "name": "read_file",
+                "result": "def sqrt(n):\n    return n**0.5\n",
+            }
+        ),
         json.dumps({"type": "message", "role": "assistant", "content": response}),
-        json.dumps({
-            "type": "result",
-            "response": response,
-            "stats": stats or {"models": {"total_tokens": 100}},
-        }),
+        json.dumps(
+            {
+                "type": "result",
+                "response": response,
+                "stats": stats or {"models": {"total_tokens": 100}},
+            }
+        ),
     ]
     return "\n".join(lines)
 
@@ -154,9 +159,7 @@ class TestCoderContainerFailure:
         (tmp_path / ".aurelia" / "logs" / "transcripts").mkdir(parents=True)
 
         docker = _mock_docker(
-            container_result=ContainerResult(
-                exit_code=1, stdout="", stderr="API key not set"
-            )
+            container_result=ContainerResult(exit_code=1, stdout="", stderr="API key not set")
         )
 
         event_log = EventLog(tmp_path / "events.jsonl")
@@ -373,9 +376,7 @@ class TestCoderNoSandboxConfig:
         """CoderComponent should raise if spec has no SandboxConfig."""
         import pytest
 
-        spec = ComponentSpec(
-            id="coder", name="Coder", role="test", sandbox=None
-        )
+        spec = ComponentSpec(id="coder", name="Coder", role="test", sandbox=None)
 
         event_log = EventLog(tmp_path / "events.jsonl")
         id_gen = IdGenerator(RuntimeState())

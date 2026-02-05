@@ -1,7 +1,5 @@
 """Tests for built-in tools and the tool registry."""
 
-
-
 from aurelia.tools.builtin import read_file, run_command, write_file
 
 

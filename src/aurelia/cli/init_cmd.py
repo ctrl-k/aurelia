@@ -1,4 +1,5 @@
 """Interactive project initialization wizard."""
+
 from __future__ import annotations
 
 import os

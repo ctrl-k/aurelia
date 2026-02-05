@@ -72,11 +72,7 @@ class BaseComponent:
         tools: list[types.Tool] | None = None
         if decls:
             tools = [
-                types.Tool(
-                    function_declarations=[
-                        types.FunctionDeclaration(**d) for d in decls
-                    ]
-                )
+                types.Tool(function_declarations=[types.FunctionDeclaration(**d) for d in decls])
             ]
 
         config = types.GenerateContentConfig(
@@ -86,9 +82,7 @@ class BaseComponent:
             tools=tools,
         )
 
-        final_content = await self._tool_use_loop(
-            task, contents, config
-        )
+        final_content = await self._tool_use_loop(task, contents, config)
         return self._parse_result(task, final_content)
 
     # ------------------------------------------------------------------
@@ -124,12 +118,8 @@ class BaseComponent:
             # Execute each tool and build function-response parts.
             response_parts: list[types.Part] = []
             for fc in function_calls:
-                logger.debug(
-                    "Tool call: %s(%s)", fc.name, fc.args
-                )
-                result = await self._execute_tool(
-                    fc.name, dict(fc.args) if fc.args else {}
-                )
+                logger.debug("Tool call: %s(%s)", fc.name, fc.args)
+                result = await self._execute_tool(fc.name, dict(fc.args) if fc.args else {})
                 response_parts.append(
                     types.Part(
                         function_response=types.FunctionResponse(
@@ -139,9 +129,7 @@ class BaseComponent:
                     )
                 )
 
-            contents.append(
-                types.Content(parts=response_parts, role="user")
-            )
+            contents.append(types.Content(parts=response_parts, role="user"))
 
         logger.warning(
             "Max tool-use rounds (%d) reached for task %s",
@@ -177,9 +165,7 @@ class BaseComponent:
                     Event(
                         seq=req_seq,
                         type="llm.request",
-                        timestamp=datetime.datetime.now(
-                            datetime.UTC
-                        ),
+                        timestamp=datetime.datetime.now(datetime.UTC),
                         data={
                             "task_id": task.id,
                             "component": self._spec.id,
@@ -191,26 +177,15 @@ class BaseComponent:
                 )
 
                 start = time.monotonic()
-                response = await self._llm_client.generate(
-                    self._spec.model.model, contents, config
-                )
-                latency_ms = int(
-                    (time.monotonic() - start) * 1000
-                )
+                response = await self._llm_client.generate(self._spec.model.model, contents, config)
+                latency_ms = int((time.monotonic() - start) * 1000)
 
                 # -- extract token counts when available --
                 input_tokens = 0
                 output_tokens = 0
                 if response.usage_metadata:
-                    input_tokens = (
-                        response.usage_metadata.prompt_token_count
-                        or 0
-                    )
-                    output_tokens = (
-                        response.usage_metadata
-                        .candidates_token_count
-                        or 0
-                    )
+                    input_tokens = response.usage_metadata.prompt_token_count or 0
+                    output_tokens = response.usage_metadata.candidates_token_count or 0
 
                 # -- emit response event --
                 resp_seq = self._id_gen.next_event_seq()
@@ -218,9 +193,7 @@ class BaseComponent:
                     Event(
                         seq=resp_seq,
                         type="llm.response",
-                        timestamp=datetime.datetime.now(
-                            datetime.UTC
-                        ),
+                        timestamp=datetime.datetime.now(datetime.UTC),
                         data={
                             "task_id": task.id,
                             "component": self._spec.id,
@@ -244,21 +217,15 @@ class BaseComponent:
                     exc,
                 )
                 if attempt < max_attempts - 1:
-                    await asyncio.sleep(
-                        backoff_seconds[attempt]
-                    )
+                    await asyncio.sleep(backoff_seconds[attempt])
 
-        raise RuntimeError(
-            f"LLM call failed after {max_attempts} attempts"
-        ) from last_exc
+        raise RuntimeError(f"LLM call failed after {max_attempts} attempts") from last_exc
 
     # ------------------------------------------------------------------
     # Tool execution
     # ------------------------------------------------------------------
 
-    async def _execute_tool(
-        self, name: str, args: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _execute_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         """Execute a tool via the registry.
 
         On error, returns an error dict instead of raising so that
@@ -267,9 +234,7 @@ class BaseComponent:
         try:
             return await self._tool_registry.execute(name, args)
         except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "Tool '%s' raised: %s", name, exc
-            )
+            logger.error("Tool '%s' raised: %s", name, exc)
             return {"error": str(exc)}
 
     # ------------------------------------------------------------------
@@ -280,9 +245,7 @@ class BaseComponent:
         """Return the system instruction for the LLM call."""
         return self._spec.model.system_instruction or ""
 
-    def _build_contents(
-        self, task: Task
-    ) -> list[types.Content]:
+    def _build_contents(self, task: Task) -> list[types.Content]:
         """Return the initial conversation contents."""
         return [
             types.Content(
@@ -291,21 +254,11 @@ class BaseComponent:
             )
         ]
 
-    def _parse_result(
-        self, task: Task, final_content: types.Content
-    ) -> TaskResult:
+    def _parse_result(self, task: Task, final_content: types.Content) -> TaskResult:
         """Convert the final LLM content into a ``TaskResult``."""
-        text_parts = [
-            p.text
-            for p in (final_content.parts or [])
-            if p.text
-        ]
-        summary = (
-            "\n".join(text_parts) if text_parts else "No response"
-        )
-        return TaskResult(
-            id=self._id_gen.next_id("result"), summary=summary
-        )
+        text_parts = [p.text for p in (final_content.parts or []) if p.text]
+        summary = "\n".join(text_parts) if text_parts else "No response"
+        return TaskResult(id=self._id_gen.next_id("result"), summary=summary)
 
     # ------------------------------------------------------------------
     # Helpers

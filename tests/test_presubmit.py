@@ -54,7 +54,7 @@ class TestFirstCheckFails:
         worktree.mkdir()
 
         checks = [
-            f"{sys.executable} -c \"import sys; sys.exit(1)\"",
+            f'{sys.executable} -c "import sys; sys.exit(1)"',
             f"{sys.executable} -c \"print('should not run')\"",
         ]
 
@@ -97,7 +97,7 @@ class TestFailedEventsEmitted:
         worktree = tmp_path / "worktree"
         worktree.mkdir()
 
-        checks = [f"{sys.executable} -c \"import sys; sys.exit(1)\""]
+        checks = [f'{sys.executable} -c "import sys; sys.exit(1)"']
 
         event_log = EventLog(tmp_path / "events.jsonl")
         id_gen = IdGenerator(RuntimeState())
@@ -119,9 +119,10 @@ class TestTimeout:
 
         # Patch timeout to 1s so the test completes quickly
         import aurelia.components.presubmit as mod
+
         monkeypatch.setattr(mod, "_TIMEOUT_S", 1)
 
-        checks = [f"{sys.executable} -c \"import time; time.sleep(60)\""]
+        checks = [f'{sys.executable} -c "import time; time.sleep(60)"']
 
         event_log = EventLog(tmp_path / "events.jsonl")
         id_gen = IdGenerator(RuntimeState())

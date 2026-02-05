@@ -77,7 +77,9 @@ class PlannerDispatcher:
         )
 
     def mark_assigned(
-        self, plan_item_id: str, candidate: Candidate,
+        self,
+        plan_item_id: str,
+        candidate: Candidate,
     ) -> None:
         """Mark a plan item as assigned to a candidate."""
         if self._plan is None:
@@ -89,7 +91,9 @@ class PlannerDispatcher:
             item.assigned_branch = candidate.branch
 
     def on_candidate_completed(
-        self, candidate: Candidate, evaluation: Evaluation | None,
+        self,
+        candidate: Candidate,
+        evaluation: Evaluation | None,
     ) -> None:
         """Update plan item status based on candidate result."""
         if self._plan is None:
@@ -115,10 +119,7 @@ class PlannerDispatcher:
             return True
 
         # Check if any TODO items exist
-        todo_items = [
-            it for it in self._plan.items
-            if it.status == PlanItemStatus.todo
-        ]
+        todo_items = [it for it in self._plan.items if it.status == PlanItemStatus.todo]
         if not todo_items:
             return True
 
@@ -126,10 +127,7 @@ class PlannerDispatcher:
         eligible = self._get_eligible_items()
         if not eligible:
             # All TODO items are blocked — check if anything is still in progress
-            assigned = [
-                it for it in self._plan.items
-                if it.status == PlanItemStatus.assigned
-            ]
+            assigned = [it for it in self._plan.items if it.status == PlanItemStatus.assigned]
             # If nothing assigned, we're deadlocked → need replan
             if not assigned:
                 return True
@@ -174,7 +172,9 @@ class PlannerDispatcher:
         return result
 
     def on_planning_completed(
-        self, result: TaskResult | None, worktree_path: str,
+        self,
+        result: TaskResult | None,
+        worktree_path: str,
     ) -> None:
         """Parse the plan.json written by the planner."""
         if result is None or result.error:
@@ -198,8 +198,10 @@ class PlannerDispatcher:
         # Merge with existing plan: keep completed/assigned items
         if self._plan is not None:
             existing_items = {
-                it.id: it for it in self._plan.items
-                if it.status in (
+                it.id: it
+                for it in self._plan.items
+                if it.status
+                in (
                     PlanItemStatus.assigned,
                     PlanItemStatus.complete,
                     PlanItemStatus.failed,
@@ -224,9 +226,7 @@ class PlannerDispatcher:
                         id=item_id,
                         description=item_data.get("description", ""),
                         instruction=item_data.get("instruction", ""),
-                        parent_branch=item_data.get(
-                            "parent_branch", "main"
-                        ),
+                        parent_branch=item_data.get("parent_branch", "main"),
                         priority=item_data.get("priority", 0),
                         depends_on=item_data.get("depends_on", []),
                         status=PlanItemStatus.todo,
@@ -242,7 +242,8 @@ class PlannerDispatcher:
         )
         logger.info(
             "Loaded plan revision %d with %d items",
-            new_revision, len(new_items),
+            new_revision,
+            len(new_items),
         )
 
     # -- Internal helpers ------------------------------------------------
@@ -252,10 +253,7 @@ class PlannerDispatcher:
         if self._plan is None:
             return []
 
-        completed_ids = {
-            it.id for it in self._plan.items
-            if it.status == PlanItemStatus.complete
-        }
+        completed_ids = {it.id for it in self._plan.items if it.status == PlanItemStatus.complete}
 
         eligible: list[PlanItem] = []
         for item in self._plan.items:
@@ -263,10 +261,7 @@ class PlannerDispatcher:
                 continue
 
             # Check dependencies
-            deps_satisfied = all(
-                dep_id in completed_ids
-                for dep_id in item.depends_on
-            )
+            deps_satisfied = all(dep_id in completed_ids for dep_id in item.depends_on)
             if not deps_satisfied:
                 continue
 
@@ -291,9 +286,7 @@ class PlannerDispatcher:
         ref_id = parent_branch[1:]  # remove $
         ref_item = self._find_item(ref_id)
         if ref_item is None:
-            logger.warning(
-                "Plan item reference %s not found", ref_id
-            )
+            logger.warning("Plan item reference %s not found", ref_id)
             return None
 
         if ref_item.status != PlanItemStatus.complete:
@@ -311,7 +304,8 @@ class PlannerDispatcher:
         return None
 
     def _find_item_by_candidate(
-        self, candidate_id: str,
+        self,
+        candidate_id: str,
     ) -> PlanItem | None:
         """Find the plan item assigned to a candidate."""
         if self._plan is None:

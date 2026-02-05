@@ -67,9 +67,7 @@ class Runtime:
         self._use_mock = use_mock
         self._docker_client = docker_client
         self._shutdown_event = asyncio.Event()
-        self._running_asyncio_tasks: dict[
-            str, asyncio.Task[TaskResult | None]
-        ] = {}
+        self._running_asyncio_tasks: dict[str, asyncio.Task[TaskResult | None]] = {}
 
         # Initialized in start()
         self._state_store: StateStore
@@ -100,9 +98,7 @@ class Runtime:
         self._state_store = StateStore(self._aurelia_dir)
         await self._state_store.initialize(self._config)
 
-        self._event_log = EventLog(
-            self._aurelia_dir / "logs" / "events.jsonl"
-        )
+        self._event_log = EventLog(self._aurelia_dir / "logs" / "events.jsonl")
 
         # 3. Load persisted state
         self._runtime_state = await self._state_store.load_runtime()
@@ -113,9 +109,7 @@ class Runtime:
 
         # 4. Git repo setup
         self._git = GitRepo(self._project_dir)
-        self._worktrees = WorktreeManager(
-            self._git, self._aurelia_dir / "worktrees"
-        )
+        self._worktrees = WorktreeManager(self._git, self._aurelia_dir / "worktrees")
 
         # 5. Tool registry
         self._tool_registry = ToolRegistry()
@@ -126,9 +120,7 @@ class Runtime:
             self._llm_client = MockLLMClient()
         else:
             # Phase 1b only supports mock
-            logger.warning(
-                "No real LLM provider configured; using mock client"
-            )
+            logger.warning("No real LLM provider configured; using mock client")
             self._llm_client = MockLLMClient()
 
         # 7. Initialize dispatcher
@@ -139,9 +131,7 @@ class Runtime:
 
         # 9. Update runtime state
         self._runtime_state.status = "running"
-        self._runtime_state.started_at = datetime.datetime.now(
-            datetime.UTC
-        )
+        self._runtime_state.started_at = datetime.datetime.now(datetime.UTC)
 
         # 10. Write PID file
         pid_path = self._aurelia_dir / "state" / "pid"
@@ -154,9 +144,7 @@ class Runtime:
         await self._emit("runtime.started", {"pid": os.getpid()})
         await self._persist_state()
 
-        logger.info(
-            "Aurelia runtime started (pid=%d)", os.getpid()
-        )
+        logger.info("Aurelia runtime started (pid=%d)", os.getpid())
 
         try:
             await self._heartbeat_loop()
@@ -172,15 +160,11 @@ class Runtime:
             for task in self._tasks:
                 if task.status == TaskStatus.running:
                     task.status = TaskStatus.cancelled
-                    task.completed_at = datetime.datetime.now(
-                        datetime.UTC
-                    )
+                    task.completed_at = datetime.datetime.now(datetime.UTC)
             self._running_asyncio_tasks.clear()
 
             self._runtime_state.status = "stopped"
-            self._runtime_state.stopped_at = datetime.datetime.now(
-                datetime.UTC
-            )
+            self._runtime_state.stopped_at = datetime.datetime.now(datetime.UTC)
             await self._emit("runtime.stopped", {})
             await self._persist_state()
 
@@ -211,9 +195,7 @@ class Runtime:
             )
 
             plan = await self._state_store.load_plan()
-            dispatcher: Dispatcher = PlannerDispatcher(
-                plan=plan
-            )
+            dispatcher: Dispatcher = PlannerDispatcher(plan=plan)
         else:
             dispatcher = DefaultDispatcher()
 
@@ -275,9 +257,7 @@ class Runtime:
                 "runtime.terminated",
                 {
                     "reason": term_reason,
-                    "total_candidates": len(
-                        self._candidates
-                    ),
+                    "total_candidates": len(self._candidates),
                 },
             )
             self._shutdown_event.set()
@@ -291,35 +271,30 @@ class Runtime:
         active = len(self._get_active_candidates())
         while (
             active < self._config.max_concurrent_tasks
-            and len(self._running_asyncio_tasks)
-            < self._config.max_concurrent_tasks
+            and len(self._running_asyncio_tasks) < self._config.max_concurrent_tasks
         ):
             request = self._dispatcher.select_next()
             if request is None:
                 break
-            candidate = await self._create_candidate(
-                parent_branch=request.parent_branch
-            )
+            candidate = await self._create_candidate(parent_branch=request.parent_branch)
             await self._dispatch_coder(
-                candidate, request.instruction,
+                candidate,
+                request.instruction,
                 extra_context=request.context,
             )
             if request.plan_item_id:
-                self._dispatcher.mark_assigned(
-                    request.plan_item_id, candidate
-                )
+                self._dispatcher.mark_assigned(request.plan_item_id, candidate)
             active += 1
 
     async def _advance_candidate(
-        self, candidate: Candidate,
+        self,
+        candidate: Candidate,
     ) -> None:
         """Advance the task pipeline for a single candidate.
 
         Pipeline: coder → presubmit → evaluator → finish.
         """
-        coder_task = self._find_task(
-            candidate.branch, "coder"
-        )
+        coder_task = self._find_task(candidate.branch, "coder")
 
         if coder_task is None:
             # Coder should have been dispatched when the candidate
@@ -331,24 +306,17 @@ class Runtime:
             return
 
         if coder_task.status == TaskStatus.failed:
-            await self._fail_candidate(
-                candidate, coder_task
-            )
+            await self._fail_candidate(candidate, coder_task)
             return
 
         if coder_task.status != TaskStatus.success:
             return
 
         # Coder succeeded — check presubmit
-        presubmit_task = self._find_task(
-            candidate.branch, "presubmit"
-        )
+        presubmit_task = self._find_task(candidate.branch, "presubmit")
 
         if presubmit_task is None:
-            if (
-                len(self._running_asyncio_tasks)
-                < self._config.max_concurrent_tasks
-            ):
+            if len(self._running_asyncio_tasks) < self._config.max_concurrent_tasks:
                 await self._dispatch_presubmit(candidate)
             return
 
@@ -356,46 +324,29 @@ class Runtime:
             return
 
         if presubmit_task.status == TaskStatus.failed:
-            await self._fail_candidate(
-                candidate, presubmit_task
-            )
+            await self._fail_candidate(candidate, presubmit_task)
             return
 
         if presubmit_task.status != TaskStatus.success:
             return
 
         # Presubmit succeeded — check evaluator
-        eval_task = self._find_task(
-            candidate.branch, "evaluator"
-        )
+        eval_task = self._find_task(candidate.branch, "evaluator")
 
         if eval_task is None:
-            if (
-                len(self._running_asyncio_tasks)
-                < self._config.max_concurrent_tasks
-            ):
+            if len(self._running_asyncio_tasks) < self._config.max_concurrent_tasks:
                 await self._dispatch_evaluator(candidate)
             return
 
         if eval_task.status == TaskStatus.success:
-            await self._finish_candidate(
-                candidate, eval_task
-            )
+            await self._finish_candidate(candidate, eval_task)
         elif eval_task.status == TaskStatus.failed:
-            await self._fail_candidate(
-                candidate, eval_task
-            )
+            await self._fail_candidate(candidate, eval_task)
 
-    async def _fail_candidate(
-        self, candidate: Candidate, failed_task: Task
-    ) -> None:
+    async def _fail_candidate(self, candidate: Candidate, failed_task: Task) -> None:
         """Mark a candidate as failed due to a task failure."""
         candidate.status = CandidateStatus.failed
-        error = (
-            failed_task.result.error
-            if failed_task.result
-            else "unknown"
-        )
+        error = failed_task.result.error if failed_task.result else "unknown"
         await self._emit(
             "candidate.failed",
             {
@@ -404,9 +355,7 @@ class Runtime:
                 "error": error,
             },
         )
-        self._dispatcher.on_candidate_completed(
-            candidate, None
-        )
+        self._dispatcher.on_candidate_completed(candidate, None)
 
     # -- Helper methods --------------------------------------------------
 
@@ -429,32 +378,28 @@ class Runtime:
             )
         ]
 
-    def _find_task(
-        self, branch: str, component: str
-    ) -> Task | None:
+    def _find_task(self, branch: str, component: str) -> Task | None:
         """Find the most recent task for a branch and component."""
         for task in reversed(self._tasks):
-            if (
-                task.branch == branch
-                and task.component == component
-            ):
+            if task.branch == branch and task.component == component:
                 return task
         return None
 
     async def _create_candidate(
-        self, parent_branch: str = "main",
+        self,
+        parent_branch: str = "main",
     ) -> Candidate:
         """Create a new candidate branch and worktree."""
         cand_id = self._id_gen.next_id("cand")
         branch = f"aurelia/{cand_id}"
 
         logger.info(
-            "Branching %s from %s", branch, parent_branch,
+            "Branching %s from %s",
+            branch,
+            parent_branch,
         )
 
-        await self._git.create_branch(
-            branch, from_branch=parent_branch
-        )
+        await self._git.create_branch(branch, from_branch=parent_branch)
         wt_path = await self._worktrees.create(branch)
 
         candidate = Candidate(
@@ -491,12 +436,8 @@ class Runtime:
         if extra_context:
             context.update(extra_context)
         # Ensure feedback and attempt_number are set
-        context.setdefault(
-            "feedback", self._build_feedback_text()
-        )
-        context.setdefault(
-            "attempt_number", len(self._candidates)
-        )
+        context.setdefault("feedback", self._build_feedback_text())
+        context.setdefault("attempt_number", len(self._candidates))
         task = Task(
             id=self._id_gen.next_id("task"),
             thread_id=self._id_gen.next_id("thread"),
@@ -516,9 +457,7 @@ class Runtime:
         )
         await self._launch_task(task, "coder")
 
-    async def _dispatch_presubmit(
-        self, candidate: Candidate
-    ) -> None:
+    async def _dispatch_presubmit(self, candidate: Candidate) -> None:
         """Create and launch a presubmit task in the background."""
         task = Task(
             id=self._id_gen.next_id("task"),
@@ -545,9 +484,7 @@ class Runtime:
         )
         await self._launch_task(task, "presubmit")
 
-    async def _dispatch_evaluator(
-        self, candidate: Candidate
-    ) -> None:
+    async def _dispatch_evaluator(self, candidate: Candidate) -> None:
         """Create and launch an evaluator task in the background."""
         candidate.status = CandidateStatus.evaluating
 
@@ -577,9 +514,7 @@ class Runtime:
         # Create a temporary worktree from main for the planner
         planner_branch = "__planner__"
         try:
-            await self._git.create_branch(
-                planner_branch, from_branch="main"
-            )
+            await self._git.create_branch(planner_branch, from_branch="main")
         except Exception:
             pass  # branch may already exist
         wt_path = await self._worktrees.create(planner_branch)
@@ -610,90 +545,63 @@ class Runtime:
 
     async def _maybe_run_planner(self) -> None:
         """Launch planner if needed and not already running."""
-        planner_task = self._find_task(
-            "__planner__", "planner"
-        )
+        planner_task = self._find_task("__planner__", "planner")
 
         if planner_task is not None:
             if planner_task.status in (
-                TaskStatus.pending, TaskStatus.running,
+                TaskStatus.pending,
+                TaskStatus.running,
             ):
                 return  # already running
 
             if planner_task.status == TaskStatus.success:
-                wt_path = planner_task.context.get(
-                    "worktree_path", ""
-                )
-                self._dispatcher.on_planning_completed(
-                    planner_task.result, wt_path
-                )
+                wt_path = planner_task.context.get("worktree_path", "")
+                self._dispatcher.on_planning_completed(planner_task.result, wt_path)
                 # Clear the planner task so future calls
                 # can detect needs_planning() again
-                self._tasks = [
-                    t for t in self._tasks
-                    if t.id != planner_task.id
-                ]
+                self._tasks = [t for t in self._tasks if t.id != planner_task.id]
                 return
 
         # No planner task or previous one failed — launch new
-        if (
-            len(self._running_asyncio_tasks)
-            < self._config.max_concurrent_tasks
-        ):
+        if len(self._running_asyncio_tasks) < self._config.max_concurrent_tasks:
             await self._dispatch_planner()
 
-    async def _launch_task(
-        self, task: Task, component_name: str
-    ) -> None:
+    async def _launch_task(self, task: Task, component_name: str) -> None:
         """Launch a task as a background asyncio.Task."""
         task.status = TaskStatus.running
         task.started_at = datetime.datetime.now(datetime.UTC)
-        await self._emit(
-            "task.started", {"task_id": task.id}
-        )
+        await self._emit("task.started", {"task_id": task.id})
 
         coro = self._run_component(task, component_name)
-        handle = asyncio.create_task(
-            coro, name=f"aurelia-{task.id}"
-        )
+        handle = asyncio.create_task(coro, name=f"aurelia-{task.id}")
         self._running_asyncio_tasks[task.id] = handle
 
     async def _collect_completed_tasks(self) -> None:
         """Poll background tasks and update state for any that finished."""
         completed_ids: list[str] = []
-        for task_id, handle in (
-            self._running_asyncio_tasks.items()
-        ):
+        for task_id, handle in self._running_asyncio_tasks.items():
             if not handle.done():
                 continue
             completed_ids.append(task_id)
 
-            task = next(
-                t for t in self._tasks if t.id == task_id
-            )
+            task = next(t for t in self._tasks if t.id == task_id)
             try:
                 result = handle.result()
                 task.result = result
                 task.status = TaskStatus.success
-                task.completed_at = datetime.datetime.now(
-                    datetime.UTC
-                )
+                task.completed_at = datetime.datetime.now(datetime.UTC)
                 self._runtime_state.total_tasks_completed += 1
 
                 await self._emit(
                     "task.completed",
                     {
                         "task_id": task.id,
-                        "summary": (
-                            result.summary if result else ""
-                        ),
+                        "summary": (result.summary if result else ""),
                     },
                 )
             except Exception as exc:
                 task.status = TaskStatus.failed
-                task.completed_at = datetime.datetime.now(
-                    datetime.UTC
-                )
+                task.completed_at = datetime.datetime.now(datetime.UTC)
                 task.result = TaskResult(
                     id=self._id_gen.next_id("result"),
                     summary="Task execution failed",
@@ -708,16 +616,12 @@ class Runtime:
                         "error": str(exc),
                     },
                 )
-                logger.exception(
-                    "Task %s failed", task.id
-                )
+                logger.exception("Task %s failed", task.id)
 
         for task_id in completed_ids:
             del self._running_asyncio_tasks[task_id]
 
-    async def _run_component(
-        self, task: Task, component_name: str
-    ) -> TaskResult:
+    async def _run_component(self, task: Task, component_name: str) -> TaskResult:
         """Instantiate and run the named component."""
         if component_name == "coder":
             spec = self._component_specs["coder"]
@@ -733,15 +637,11 @@ class Runtime:
             return await component.execute(task)
 
         if component_name == "presubmit":
-            presubmit = PresubmitComponent(
-                self._event_log, self._id_gen
-            )
+            presubmit = PresubmitComponent(self._event_log, self._id_gen)
             return await presubmit.execute(task)
 
         if component_name == "evaluator":
-            evaluator = EvaluatorComponent(
-                self._event_log, self._id_gen
-            )
+            evaluator = EvaluatorComponent(self._event_log, self._id_gen)
             return await evaluator.execute(task)
 
         if component_name == "planner":
@@ -766,19 +666,13 @@ class Runtime:
         eval_task: Task,
     ) -> None:
         """Record evaluation result and update candidate status."""
-        metrics: dict[str, Any] = (
-            eval_task.result.metrics if eval_task.result else {}
-        )
+        metrics: dict[str, Any] = eval_task.result.metrics if eval_task.result else {}
         passed = self._check_metrics_pass(metrics)
 
         # Try to retrieve the latest commit SHA
         try:
-            commits = await self._git.log(
-                candidate.branch, n=1
-            )
-            commit_sha: str = (
-                commits[0]["sha"] if commits else "unknown"
-            )
+            commits = await self._git.log(candidate.branch, n=1)
+            commit_sha: str = commits[0]["sha"] if commits else "unknown"
         except Exception:
             commit_sha = "unknown"
 
@@ -788,22 +682,14 @@ class Runtime:
             candidate_branch=candidate.branch,
             commit_sha=commit_sha,
             metrics=metrics,
-            raw_output=(
-                eval_task.result.summary
-                if eval_task.result
-                else ""
-            ),
+            raw_output=(eval_task.result.summary if eval_task.result else ""),
             timestamp=datetime.datetime.now(datetime.UTC),
             passed=passed,
         )
 
         self._evaluations.append(evaluation)
         candidate.evaluations.append(evaluation.id)
-        candidate.status = (
-            CandidateStatus.succeeded
-            if passed
-            else CandidateStatus.failed
-        )
+        candidate.status = CandidateStatus.succeeded if passed else CandidateStatus.failed
 
         await self._emit(
             "candidate.evaluated",
@@ -814,9 +700,7 @@ class Runtime:
                 "passed": passed,
             },
         )
-        self._dispatcher.on_candidate_completed(
-            candidate, evaluation
-        )
+        self._dispatcher.on_candidate_completed(candidate, evaluation)
 
     # -- Feedback and evolution helpers ------------------------------------
 
@@ -834,16 +718,10 @@ class Runtime:
                 if ev is None:
                     continue
                 lines.append(f"### Attempt {i}")
-                lines.append(
-                    f"- Status: {'PASSED' if ev.passed else 'FAILED'}"
-                )
-                lines.append(
-                    f"- Metrics: {json.dumps(ev.metrics)}"
-                )
+                lines.append(f"- Status: {'PASSED' if ev.passed else 'FAILED'}")
+                lines.append(f"- Metrics: {json.dumps(ev.metrics)}")
                 if ev.raw_output:
-                    lines.append(
-                        f"- Output: {ev.raw_output[:200]}"
-                    )
+                    lines.append(f"- Output: {ev.raw_output[:200]}")
                 lines.append("")
 
         return "\n".join(lines)
@@ -861,11 +739,7 @@ class Runtime:
                 ev = eval_by_id.get(eval_id)
                 if ev is None or not ev.passed:
                     continue
-                nums = [
-                    v
-                    for v in ev.metrics.values()
-                    if isinstance(v, (int, float))
-                ]
+                nums = [v for v in ev.metrics.values() if isinstance(v, (int, float))]
                 if not nums:
                     continue
                 score = sum(nums) / len(nums)
@@ -875,9 +749,7 @@ class Runtime:
 
         return best
 
-    def _check_metrics_pass(
-        self, metrics: dict[str, Any]
-    ) -> bool:
+    def _check_metrics_pass(self, metrics: dict[str, Any]) -> bool:
         """Check if metrics satisfy the termination condition.
 
         If a termination condition is configured (e.g. 'accuracy>=0.95'),
@@ -890,11 +762,7 @@ class Runtime:
             return True
         for metric, threshold in conditions:
             val = metrics.get(metric)
-            if (
-                val is None
-                or not isinstance(val, (int, float))
-                or val < threshold
-            ):
+            if val is None or not isinstance(val, (int, float)) or val < threshold:
                 return False
         return True
 
@@ -912,18 +780,13 @@ class Runtime:
             for ev in self._evaluations:
                 if ev.passed:
                     logger.info(
-                        "Termination: metrics meet condition"
-                        " '%s'",
+                        "Termination: metrics meet condition '%s'",
                         self._config.termination_condition,
                     )
                     return "termination_condition_met"
 
         # Check abandon threshold
-        failed_count = sum(
-            1
-            for c in self._candidates
-            if c.status == CandidateStatus.failed
-        )
+        failed_count = sum(1 for c in self._candidates if c.status == CandidateStatus.failed)
         if failed_count >= self._config.candidate_abandon_threshold:
             logger.warning(
                 "Abandon threshold: %d failed candidates",
@@ -940,22 +803,16 @@ class Runtime:
         if not self._config.termination_condition:
             return []
         conditions: list[tuple[str, float]] = []
-        for part in self._config.termination_condition.split(
-            ","
-        ):
+        for part in self._config.termination_condition.split(","):
             part = part.strip()
             if ">=" in part:
                 metric, value = part.split(">=", 1)
-                conditions.append(
-                    (metric.strip(), float(value.strip()))
-                )
+                conditions.append((metric.strip(), float(value.strip())))
         return conditions
 
     # -- Event emission and state persistence -----------------------------
 
-    async def _emit(
-        self, event_type: str, data: dict[str, Any]
-    ) -> None:
+    async def _emit(self, event_type: str, data: dict[str, Any]) -> None:
         """Emit an event to the event log."""
         await self._event_log.append(
             Event(
@@ -968,16 +825,10 @@ class Runtime:
 
     async def _persist_state(self) -> None:
         """Persist runtime state, tasks, and candidates."""
-        await self._state_store.save_runtime(
-            self._runtime_state
-        )
+        await self._state_store.save_runtime(self._runtime_state)
         await self._state_store.save_tasks(self._tasks)
-        await self._state_store.save_candidates(
-            self._candidates
-        )
-        await self._state_store.save_evaluations(
-            self._evaluations
-        )
+        await self._state_store.save_candidates(self._candidates)
+        await self._state_store.save_evaluations(self._evaluations)
 
     # -- Crash recovery ---------------------------------------------------
 
@@ -1004,8 +855,7 @@ class Runtime:
                 PermissionError,
             ):
                 logger.warning(
-                    "Detected stale PID file (pid=%s);"
-                    " recovering",
+                    "Detected stale PID file (pid=%s); recovering",
                     old_pid_str,
                 )
                 pid_path.unlink(missing_ok=True)
@@ -1015,9 +865,7 @@ class Runtime:
         for task in self._tasks:
             if task.status == TaskStatus.running:
                 task.status = TaskStatus.failed
-                task.completed_at = datetime.datetime.now(
-                    datetime.UTC
-                )
+                task.completed_at = datetime.datetime.now(datetime.UTC)
                 task.result = TaskResult(
                     id=self._id_gen.next_id("result"),
                     summary="Task interrupted by crash",
@@ -1032,33 +880,23 @@ class Runtime:
                 CandidateStatus.active,
                 CandidateStatus.evaluating,
             ):
-                coder = self._find_task(
-                    candidate.branch, "coder"
-                )
-                evalu = self._find_task(
-                    candidate.branch, "evaluator"
-                )
+                coder = self._find_task(candidate.branch, "coder")
+                evalu = self._find_task(candidate.branch, "evaluator")
                 had_crash = (
                     coder is not None
                     and coder.result is not None
-                    and coder.result.error
-                    == "runtime_crash_recovery"
+                    and coder.result.error == "runtime_crash_recovery"
                 ) or (
                     evalu is not None
                     and evalu.result is not None
-                    and evalu.result.error
-                    == "runtime_crash_recovery"
+                    and evalu.result.error == "runtime_crash_recovery"
                 )
                 if had_crash:
-                    candidate.status = (
-                        CandidateStatus.failed
-                    )
+                    candidate.status = CandidateStatus.failed
 
         # 4. Clean up orphaned worktrees
         try:
-            active_worktrees = (
-                await self._worktrees.list_active()
-            )
+            active_worktrees = await self._worktrees.list_active()
             active_branches = {
                 c.branch
                 for c in self._candidates
@@ -1069,35 +907,24 @@ class Runtime:
                 )
             }
             for branch, _path in active_worktrees:
-                if (
-                    branch.startswith("aurelia/")
-                    and branch not in active_branches
-                ):
+                if branch.startswith("aurelia/") and branch not in active_branches:
                     try:
-                        await self._worktrees.remove(
-                            branch
-                        )
+                        await self._worktrees.remove(branch)
                         logger.info(
-                            "Cleaned up orphaned worktree:"
-                            " %s",
+                            "Cleaned up orphaned worktree: %s",
                             branch,
                         )
                     except Exception:
                         logger.warning(
-                            "Failed to clean orphaned"
-                            " worktree: %s",
+                            "Failed to clean orphaned worktree: %s",
                             branch,
                         )
         except Exception:
-            logger.warning(
-                "Could not enumerate worktrees"
-                " for cleanup"
-            )
+            logger.warning("Could not enumerate worktrees for cleanup")
 
         if recovered_count > 0:
             logger.warning(
-                "Crash recovery: marked %d interrupted"
-                " tasks as failed",
+                "Crash recovery: marked %d interrupted tasks as failed",
                 recovered_count,
             )
             await self._emit(
@@ -1112,6 +939,4 @@ class Runtime:
         """Install SIGTERM/SIGINT handlers for graceful shutdown."""
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(
-                sig, self._shutdown_event.set
-            )
+            loop.add_signal_handler(sig, self._shutdown_event.set)

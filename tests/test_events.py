@@ -81,9 +81,7 @@ class TestCrashRecovery:
     async def test_blank_lines_skipped(self, tmp_path):
         log_path = tmp_path / "events.jsonl"
         e = _event(1)
-        log_path.write_text(
-            "\n" + e.model_dump_json() + "\n\n\n"
-        )
+        log_path.write_text("\n" + e.model_dump_json() + "\n\n\n")
         log = EventLog(log_path)
         events = await log.read_all()
         assert len(events) == 1
@@ -92,9 +90,7 @@ class TestCrashRecovery:
     async def test_malformed_lines_skipped(self, tmp_path):
         log_path = tmp_path / "events.jsonl"
         e = _event(1)
-        log_path.write_text(
-            "not valid json\n" + e.model_dump_json() + "\n{broken\n"
-        )
+        log_path.write_text("not valid json\n" + e.model_dump_json() + "\n{broken\n")
         log = EventLog(log_path)
         events = await log.read_all()
         assert len(events) == 1

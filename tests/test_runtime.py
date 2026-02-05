@@ -17,10 +17,12 @@ from aurelia.sandbox.docker import ContainerResult, DockerClient
 
 def _mock_docker_client() -> DockerClient:
     """Create a mock DockerClient for runtime tests."""
-    mock_stdout = "\n".join([
-        json.dumps({"type": "init", "session_id": "s1", "model": "gemini-2.5-pro"}),
-        json.dumps({"type": "result", "response": "Mock done.", "stats": {}}),
-    ])
+    mock_stdout = "\n".join(
+        [
+            json.dumps({"type": "init", "session_id": "s1", "model": "gemini-2.5-pro"}),
+            json.dumps({"type": "result", "response": "Mock done.", "stats": {}}),
+        ]
+    )
     docker = AsyncMock(spec=DockerClient)
     docker.check_available = AsyncMock()
     docker.image_exists = AsyncMock(return_value=True)
@@ -42,9 +44,7 @@ def _init_project(tmp_path):
         (aurelia_dir / subdir).mkdir(parents=True)
 
     # Write workflow config with fast heartbeat under the 'runtime' key
-    (aurelia_dir / "config" / "workflow.yaml").write_text(
-        "runtime:\n  heartbeat_interval_s: 1\n"
-    )
+    (aurelia_dir / "config" / "workflow.yaml").write_text("runtime:\n  heartbeat_interval_s: 1\n")
 
     # Create evaluate.py so the evaluator can succeed
     (project_dir / "evaluate.py").write_text(
@@ -162,9 +162,7 @@ class TestParallelCandidates:
             "  candidate_abandon_threshold: 10\n"
         )
 
-        runtime = Runtime(
-            project_dir, use_mock=True, docker_client=_mock_docker_client()
-        )
+        runtime = Runtime(project_dir, use_mock=True, docker_client=_mock_docker_client())
 
         async def stop_after_cycles():
             await asyncio.sleep(4)
@@ -192,9 +190,7 @@ class TestCrashRecovery:
         # Write a PID for a process that doesn't exist
         pid_path.write_text("999999")
 
-        runtime = Runtime(
-            project_dir, use_mock=True, docker_client=_mock_docker_client()
-        )
+        runtime = Runtime(project_dir, use_mock=True, docker_client=_mock_docker_client())
 
         async def stop_soon():
             await asyncio.sleep(0.5)
@@ -218,9 +214,7 @@ class TestCrashRecovery:
         # Write current process PID (definitely alive)
         pid_path.write_text(str(os.getpid()))
 
-        runtime = Runtime(
-            project_dir, use_mock=True, docker_client=_mock_docker_client()
-        )
+        runtime = Runtime(project_dir, use_mock=True, docker_client=_mock_docker_client())
 
         with pytest.raises(RuntimeError, match="Another Aurelia instance"):
             await runtime.start()
@@ -282,9 +276,7 @@ class TestCrashRecovery:
         (state_dir / "candidates.json").write_text(json.dumps(candidates_data))
         (state_dir / "runtime.json").write_text(json.dumps(runtime_data))
 
-        runtime = Runtime(
-            project_dir, use_mock=True, docker_client=_mock_docker_client()
-        )
+        runtime = Runtime(project_dir, use_mock=True, docker_client=_mock_docker_client())
 
         async def stop_soon():
             await asyncio.sleep(0.5)
@@ -326,9 +318,7 @@ class TestGracefulShutdown:
 
         slow_docker.run_container = AsyncMock(side_effect=slow_run)
 
-        runtime = Runtime(
-            project_dir, use_mock=True, docker_client=slow_docker
-        )
+        runtime = Runtime(project_dir, use_mock=True, docker_client=slow_docker)
 
         async def stop_during_task():
             # Wait long enough for a task to be launched

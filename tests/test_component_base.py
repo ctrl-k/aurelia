@@ -120,9 +120,7 @@ class TestToolUseMaxRounds:
         registry = _make_registry_with_tools()
 
         # Always returns a function call — loop should exit after max_rounds
-        mock_llm = MockLLMClient(
-            responses=[_fc_content("read_file", {"path": str(test_file)})]
-        )
+        mock_llm = MockLLMClient(responses=[_fc_content("read_file", {"path": str(test_file)})])
         spec = ComponentSpec(id="test", name="Test", role="test", tools=["read_file"])
         component = BaseComponent(spec, mock_llm, registry, event_log, id_gen)
 
@@ -147,7 +145,11 @@ class TestToolErrorReturnsDict:
 
         spec = ComponentSpec(id="test", name="Test", role="test", tools=["read_file"])
         component = BaseComponent(
-            spec, None, registry, event_log, id_gen  # type: ignore[arg-type]
+            spec,
+            None,
+            registry,
+            event_log,
+            id_gen,  # type: ignore[arg-type]
         )
 
         # Call a tool that doesn't exist — should return error dict, not raise

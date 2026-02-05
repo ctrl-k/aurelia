@@ -42,11 +42,13 @@ class ToolRegistry:
             if name not in self._tools:
                 continue
             reg = self._tools[name]
-            declarations.append({
-                "name": reg.name,
-                "description": reg.description,
-                "parameters": reg.input_schema,
-            })
+            declarations.append(
+                {
+                    "name": reg.name,
+                    "description": reg.description,
+                    "parameters": reg.input_schema,
+                }
+            )
         return declarations
 
     async def execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:

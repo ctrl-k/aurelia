@@ -47,7 +47,9 @@ class Dispatcher(Protocol):
         ...
 
     def on_candidate_completed(
-        self, candidate: Candidate, evaluation: Evaluation | None,
+        self,
+        candidate: Candidate,
+        evaluation: Evaluation | None,
     ) -> None:
         """Called when a candidate finishes (success or failure)."""
         ...
@@ -61,7 +63,9 @@ class Dispatcher(Protocol):
         ...
 
     def on_planning_completed(
-        self, result: TaskResult, worktree_path: str,
+        self,
+        result: TaskResult,
+        worktree_path: str,
     ) -> None:
         """Called when a planning task finishes."""
         ...
@@ -96,7 +100,9 @@ class DefaultDispatcher:
         )
 
     def on_candidate_completed(
-        self, candidate: Candidate, evaluation: Evaluation | None,
+        self,
+        candidate: Candidate,
+        evaluation: Evaluation | None,
     ) -> None:
         # DefaultDispatcher has no internal state to update.
         pass
@@ -108,7 +114,9 @@ class DefaultDispatcher:
         return {}
 
     def on_planning_completed(
-        self, result: TaskResult, worktree_path: str,
+        self,
+        result: TaskResult,
+        worktree_path: str,
     ) -> None:
         pass
 
@@ -128,10 +136,7 @@ class DefaultDispatcher:
                 ev = eval_by_id.get(eval_id)
                 if ev is None or not ev.passed:
                     continue
-                nums = [
-                    v for v in ev.metrics.values()
-                    if isinstance(v, (int, float))
-                ]
+                nums = [v for v in ev.metrics.values() if isinstance(v, (int, float))]
                 if not nums:
                     continue
                 score = sum(nums) / len(nums)
@@ -156,16 +161,10 @@ class DefaultDispatcher:
                 if ev is None:
                     continue
                 lines.append(f"### Attempt {i}")
-                lines.append(
-                    f"- Status: {'PASSED' if ev.passed else 'FAILED'}"
-                )
-                lines.append(
-                    f"- Metrics: {json.dumps(ev.metrics)}"
-                )
+                lines.append(f"- Status: {'PASSED' if ev.passed else 'FAILED'}")
+                lines.append(f"- Metrics: {json.dumps(ev.metrics)}")
                 if ev.raw_output:
-                    lines.append(
-                        f"- Output: {ev.raw_output[:200]}"
-                    )
+                    lines.append(f"- Output: {ev.raw_output[:200]}")
                 lines.append("")
 
         return "\n".join(lines)

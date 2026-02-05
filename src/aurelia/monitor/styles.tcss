@@ -1,0 +1,57 @@
+/* Aurelia Monitor TUI Styles */
+
+/* Main screen layout */
+Screen {
+    background: $background;
+}
+
+/* Main horizontal layout */
+#main-layout {
+    height: 1fr;
+}
+
+/* Header styling is in HeaderWidget DEFAULT_CSS */
+
+/* Tabbed content area */
+#main-tabs {
+    width: 1fr;
+    height: 1fr;
+}
+
+/* Tab pane content */
+TabPane {
+    padding: 0;
+}
+
+/* DataTable styling */
+DataTable {
+    height: 1fr;
+    scrollbar-gutter: stable;
+}
+
+DataTable > .datatable--header {
+    text-style: bold;
+    background: $surface;
+}
+
+DataTable > .datatable--cursor {
+    background: $primary 30%;
+}
+
+DataTable:focus > .datatable--cursor {
+    background: $primary 50%;
+}
+
+/* Footer styling */
+Footer {
+    background: $surface;
+}
+
+/* Scrollbar styling */
+*::-webkit-scrollbar {
+    background: $surface-darken-1;
+}
+
+*::-webkit-scrollbar-thumb {
+    background: $primary;
+}

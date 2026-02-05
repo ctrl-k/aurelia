@@ -35,9 +35,7 @@ class PresubmitComponent:
         self._event_log = event_log
         self._id_gen = id_generator
 
-    async def _emit(
-        self, event_type: str, data: dict[str, object]
-    ) -> None:
+    async def _emit(self, event_type: str, data: dict[str, object]) -> None:
         event = Event(
             seq=self._id_gen.next_event_seq(),
             type=event_type,
@@ -55,9 +53,7 @@ class PresubmitComponent:
         :class:`TaskResult` is returned.
         """
         worktree_path = task.context["worktree_path"]
-        checks: list[str] = task.context.get(
-            "checks", ["pixi run test"]
-        )
+        checks: list[str] = task.context.get("checks", ["pixi run test"])
         result_id = self._id_gen.next_id("result")
 
         await self._emit(
@@ -79,18 +75,13 @@ class PresubmitComponent:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                stdout_bytes, stderr_bytes = (
-                    await asyncio.wait_for(
-                        proc.communicate(), timeout=_TIMEOUT_S
-                    )
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    proc.communicate(), timeout=_TIMEOUT_S
                 )
             except TimeoutError:
                 proc.kill()  # type: ignore[union-attr]
                 await proc.wait()  # type: ignore[union-attr]
-                error_msg = (
-                    f"Check '{check}' timed out"
-                    f" after {_TIMEOUT_S}s"
-                )
+                error_msg = f"Check '{check}' timed out after {_TIMEOUT_S}s"
                 result = TaskResult(
                     id=result_id,
                     summary=error_msg,
@@ -110,10 +101,7 @@ class PresubmitComponent:
             stderr = stderr_bytes.decode()
 
             if proc.returncode != 0:
-                error_msg = (
-                    f"Check '{check}' failed"
-                    f" (exit {proc.returncode})"
-                )
+                error_msg = f"Check '{check}' failed (exit {proc.returncode})"
                 detail = stderr or stdout
                 if detail:
                     error_msg += f": {detail[:500]}"
@@ -134,11 +122,7 @@ class PresubmitComponent:
 
             outputs.append(f"{check}: OK")
 
-        summary = (
-            "All presubmit checks passed"
-            if outputs
-            else "No checks configured"
-        )
+        summary = "All presubmit checks passed" if outputs else "No checks configured"
         result = TaskResult(
             id=result_id,
             summary=summary,

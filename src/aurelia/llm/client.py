@@ -35,9 +35,7 @@ class MockLLMClient:
         self._calls.append({"model": model, "contents": contents, "config": config})
         content = self._responses[self._call_index % len(self._responses)]
         self._call_index += 1
-        return types.GenerateContentResponse(
-            candidates=[types.Candidate(content=content)]
-        )
+        return types.GenerateContentResponse(candidates=[types.Candidate(content=content)])
 
     @property
     def calls(self) -> list[dict]:

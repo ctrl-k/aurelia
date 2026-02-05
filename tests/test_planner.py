@@ -71,9 +71,8 @@ def _mock_docker_client(
             if mounts:
                 worktree_path = mounts[0][0]
                 import pathlib
-                (pathlib.Path(worktree_path) / "plan.json").write_text(
-                    plan_json
-                )
+
+                (pathlib.Path(worktree_path) / "plan.json").write_text(plan_json)
         return ContainerResult(exit_code=exit_code, stdout=stdout, stderr="")
 
     docker.run_container = mock_run_container
@@ -96,9 +95,7 @@ class TestPlannerWritesContextAndReadsPlan:
             ],
         }
 
-        docker = _mock_docker_client(
-            plan_json=json.dumps(plan_content)
-        )
+        docker = _mock_docker_client(plan_json=json.dumps(plan_content))
         event_log = EventLog(tmp_path / "events.jsonl")
         id_gen = IdGenerator(RuntimeState())
 
@@ -155,9 +152,7 @@ class TestPlannerEventsEmitted:
         worktree.mkdir()
 
         plan_content = {"summary": "Plan", "items": []}
-        docker = _mock_docker_client(
-            plan_json=json.dumps(plan_content)
-        )
+        docker = _mock_docker_client(plan_json=json.dumps(plan_content))
         event_log = EventLog(tmp_path / "events.jsonl")
         id_gen = IdGenerator(RuntimeState())
 
