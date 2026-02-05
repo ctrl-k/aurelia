@@ -20,6 +20,7 @@ loop driven by a heartbeat scheduler.
    - A candidate git branch and worktree are created.
    - A **coder** agent runs [Gemini CLI](https://github.com/google-gemini/gemini-cli)
      inside a Docker container to read and modify the solution.
+   - A **presubmit** check runs `pixi run test` to verify the changes.
    - An **evaluator** runs `pixi run evaluate` in the worktree and collects metrics.
    - Results are recorded as events in an append-only JSONL log.
    - On the next cycle, a new candidate is created — branching from the best
@@ -115,7 +116,7 @@ pixi run typecheck  # run pyright
 src/aurelia/
   cli/           CLI entry point and init wizard
   core/          Models, config, event log, state store, ID generator, runtime
-  components/    Base component engine, coder, evaluator, planner, prompt templates
+  components/    Base component engine, coder, evaluator, planner, presubmit, prompt templates
   dispatch/      Dispatcher protocol, DefaultDispatcher, PlannerDispatcher
   monitor/       Real-time Textual TUI dashboard
   llm/           LLM client protocol, mock client, response cache
