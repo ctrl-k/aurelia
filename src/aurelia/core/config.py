@@ -100,9 +100,23 @@ def default_component_specs() -> dict[str, ComponentSpec]:
         role="Run lint and test checks before evaluation",
     )
 
+    planner = ComponentSpec(
+        id="planner",
+        name="Planner",
+        role="Examine repo state and produce an improvement plan",
+        model=ModelConfig(),
+        sandbox=SandboxConfig(
+            image="aurelia-coder:latest",
+            network=True,
+            timeout_s=300,
+            env_forward=["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        ),
+    )
+
     return {
         "root": root,
         "coder": coder,
         "evaluator": evaluator,
         "presubmit": presubmit,
+        "planner": planner,
     }

@@ -192,6 +192,7 @@ class RuntimeConfig(BaseModel):
         default_factory=lambda: ["pixi run test"]
     )
     candidate_selection: str = "top_k_with_wildcard"
+    dispatcher: str = "default"
     report_interval_heartbeats: int = 5
     token_budget: int | None = None
     heartbeat_file: str = "HEARTBEAT.md"
@@ -318,6 +319,51 @@ class NotebookSpec(BaseModel):
     path: str
     last_generated_commit: str
     sections: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Dispatch / planning
+# ---------------------------------------------------------------------------
+
+
+class PlanItemStatus(StrEnum):
+    todo = "todo"
+    assigned = "assigned"
+    complete = "complete"
+    failed = "failed"
+
+
+class PlanItem(BaseModel):
+    """A single actionable item in an improvement plan."""
+
+    id: str
+    description: str
+    instruction: str
+    parent_branch: str = "main"
+    status: PlanItemStatus = PlanItemStatus.todo
+    priority: int = 0
+    depends_on: list[str] = Field(default_factory=list)
+    assigned_candidate_id: str | None = None
+    assigned_branch: str | None = None
+
+
+class Plan(BaseModel):
+    """A structured improvement plan produced by a Planner."""
+
+    id: str
+    summary: str
+    items: list[PlanItem] = Field(default_factory=list)
+    created_at: datetime
+    revision: int = 0
+
+
+class DispatchRequest(BaseModel):
+    """A request from a Dispatcher to create a new candidate."""
+
+    parent_branch: str
+    instruction: str
+    context: dict[str, Any] = Field(default_factory=dict)
+    plan_item_id: str | None = None
 
 
 # ---------------------------------------------------------------------------

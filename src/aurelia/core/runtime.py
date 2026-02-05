@@ -17,6 +17,7 @@ from typing import Any
 
 from aurelia.components.coder import CoderComponent
 from aurelia.components.evaluator import EvaluatorComponent
+from aurelia.components.planner import PlannerComponent
 from aurelia.components.presubmit import PresubmitComponent
 from aurelia.core.config import (
     default_component_specs,
@@ -38,6 +39,7 @@ from aurelia.core.models import (
     TaskStatus,
 )
 from aurelia.core.state import StateStore
+from aurelia.dispatch.base import DefaultDispatcher, DispatchContext, Dispatcher
 from aurelia.git.repo import GitRepo
 from aurelia.git.worktree import WorktreeManager
 from aurelia.llm.client import LLMClient, MockLLMClient
@@ -80,6 +82,7 @@ class Runtime:
         self._tool_registry: ToolRegistry
         self._llm_client: LLMClient
         self._component_specs: dict[str, ComponentSpec]
+        self._dispatcher: Dispatcher
         self._tasks: list[Task]
         self._candidates: list[Candidate]
         self._evaluations: list[Evaluation]
@@ -128,16 +131,19 @@ class Runtime:
             )
             self._llm_client = MockLLMClient()
 
-        # 7. Crash recovery (before marking as running)
+        # 7. Initialize dispatcher
+        self._dispatcher = await self._create_dispatcher()
+
+        # 8. Crash recovery (before marking as running)
         await self._recover_from_crash()
 
-        # 8. Update runtime state
+        # 9. Update runtime state
         self._runtime_state.status = "running"
         self._runtime_state.started_at = datetime.datetime.now(
             datetime.UTC
         )
 
-        # 8. Write PID file
+        # 10. Write PID file
         pid_path = self._aurelia_dir / "state" / "pid"
         pid_path.write_text(str(os.getpid()))
 
@@ -186,6 +192,34 @@ class Runtime:
         logger.info("Shutdown requested")
         self._shutdown_event.set()
 
+    # -- Dispatcher -------------------------------------------------------
+
+    async def _create_dispatcher(self) -> Dispatcher:
+        """Instantiate the configured dispatcher."""
+        instruction = self._read_instruction()
+        ctx = DispatchContext(
+            project_dir=self._project_dir,
+            instruction=instruction,
+            candidates=self._candidates,
+            evaluations=self._evaluations,
+            config=self._config,
+        )
+
+        if self._config.dispatcher == "planner":
+            from aurelia.dispatch.planner import (
+                PlannerDispatcher,
+            )
+
+            plan = await self._state_store.load_plan()
+            dispatcher: Dispatcher = PlannerDispatcher(
+                plan=plan
+            )
+        else:
+            dispatcher = DefaultDispatcher()
+
+        await dispatcher.initialize(ctx)
+        return dispatcher
+
     # -- Heartbeat loop ---------------------------------------------------
 
     async def _heartbeat_loop(self) -> None:
@@ -226,17 +260,12 @@ class Runtime:
             {"count": self._runtime_state.heartbeat_count},
         )
 
-        # 1. Read instruction from README.md
-        instruction = self._read_instruction()
-
-        # 2. Collect completed background tasks
+        # 1. Collect completed background tasks
         await self._collect_completed_tasks()
 
         # 3. Advance pipeline for each active candidate
         for candidate in self._get_active_candidates():
-            await self._advance_candidate(
-                candidate, instruction
-            )
+            await self._advance_candidate(candidate)
 
         # 4. Check termination
         term_reason = self._should_terminate()
@@ -254,21 +283,35 @@ class Runtime:
             self._shutdown_event.set()
             return
 
-        # 5. Launch new candidates up to concurrency limit
+        # 5. Handle planning if dispatcher needs it
+        if self._dispatcher.needs_planning():
+            await self._maybe_run_planner()
+
+        # 6. Fill concurrency slots from dispatcher
         active = len(self._get_active_candidates())
         while (
             active < self._config.max_concurrent_tasks
             and len(self._running_asyncio_tasks)
             < self._config.max_concurrent_tasks
         ):
-            candidate = await self._create_candidate()
-            await self._dispatch_coder(
-                candidate, instruction
+            request = self._dispatcher.select_next()
+            if request is None:
+                break
+            candidate = await self._create_candidate(
+                parent_branch=request.parent_branch
             )
+            await self._dispatch_coder(
+                candidate, request.instruction,
+                extra_context=request.context,
+            )
+            if request.plan_item_id:
+                self._dispatcher.mark_assigned(
+                    request.plan_item_id, candidate
+                )
             active += 1
 
     async def _advance_candidate(
-        self, candidate: Candidate, instruction: str
+        self, candidate: Candidate,
     ) -> None:
         """Advance the task pipeline for a single candidate.
 
@@ -279,13 +322,9 @@ class Runtime:
         )
 
         if coder_task is None:
-            if (
-                len(self._running_asyncio_tasks)
-                < self._config.max_concurrent_tasks
-            ):
-                await self._dispatch_coder(
-                    candidate, instruction
-                )
+            # Coder should have been dispatched when the candidate
+            # was created.  If missing (e.g. after crash recovery),
+            # skip this candidate — the dispatcher will re-evaluate.
             return
 
         if coder_task.status == TaskStatus.running:
@@ -365,6 +404,9 @@ class Runtime:
                 "error": error,
             },
         )
+        self._dispatcher.on_candidate_completed(
+            candidate, None
+        )
 
     # -- Helper methods --------------------------------------------------
 
@@ -399,25 +441,16 @@ class Runtime:
                 return task
         return None
 
-    async def _create_candidate(self) -> Candidate:
-        """Create a new candidate branch and worktree.
-
-        Branches from the best previous candidate if one succeeded,
-        otherwise from main.
-        """
+    async def _create_candidate(
+        self, parent_branch: str = "main",
+    ) -> Candidate:
+        """Create a new candidate branch and worktree."""
         cand_id = self._id_gen.next_id("cand")
         branch = f"aurelia/{cand_id}"
 
-        best = self._get_best_candidate()
-        if best is not None:
-            parent_branch = best.branch
-            logger.info(
-                "Branching %s from best candidate %s",
-                branch,
-                parent_branch,
-            )
-        else:
-            parent_branch = "main"
+        logger.info(
+            "Branching %s from %s", branch, parent_branch,
+        )
 
         await self._git.create_branch(
             branch, from_branch=parent_branch
@@ -448,21 +481,30 @@ class Runtime:
         self,
         candidate: Candidate,
         instruction: str,
+        extra_context: dict[str, Any] | None = None,
     ) -> None:
         """Create and execute a coder task for the candidate."""
+        context = {
+            "worktree_path": candidate.worktree_path,
+            "problem_description": self._read_instruction(),
+        }
+        if extra_context:
+            context.update(extra_context)
+        # Ensure feedback and attempt_number are set
+        context.setdefault(
+            "feedback", self._build_feedback_text()
+        )
+        context.setdefault(
+            "attempt_number", len(self._candidates)
+        )
         task = Task(
             id=self._id_gen.next_id("task"),
             thread_id=self._id_gen.next_id("thread"),
             component="coder",
             branch=candidate.branch,
-            instruction=f"Improve the solution. {instruction}",
+            instruction=instruction,
             status=TaskStatus.pending,
-            context={
-                "worktree_path": candidate.worktree_path,
-                "problem_description": self._read_instruction(),
-                "feedback": self._build_feedback_text(),
-                "attempt_number": len(self._candidates),
-            },
+            context=context,
             created_at=datetime.datetime.now(datetime.UTC),
         )
         self._tasks.append(task)
@@ -529,6 +571,76 @@ class Runtime:
             {"task_id": task.id, "component": "evaluator"},
         )
         await self._launch_task(task, "evaluator")
+
+    async def _dispatch_planner(self) -> None:
+        """Create and launch a planner task in the background."""
+        # Create a temporary worktree from main for the planner
+        planner_branch = "__planner__"
+        try:
+            await self._git.create_branch(
+                planner_branch, from_branch="main"
+            )
+        except Exception:
+            pass  # branch may already exist
+        wt_path = await self._worktrees.create(planner_branch)
+
+        planning_ctx = self._dispatcher.get_planning_context()
+        task = Task(
+            id=self._id_gen.next_id("task"),
+            thread_id=self._id_gen.next_id("thread"),
+            component="planner",
+            branch=planner_branch,
+            instruction="Generate an improvement plan",
+            status=TaskStatus.pending,
+            context={
+                "worktree_path": str(wt_path),
+                "planning_context": planning_ctx,
+                "problem_description": self._read_instruction(),
+            },
+            created_at=datetime.datetime.now(datetime.UTC),
+        )
+        self._tasks.append(task)
+        self._runtime_state.total_tasks_dispatched += 1
+
+        await self._emit(
+            "task.created",
+            {"task_id": task.id, "component": "planner"},
+        )
+        await self._launch_task(task, "planner")
+
+    async def _maybe_run_planner(self) -> None:
+        """Launch planner if needed and not already running."""
+        planner_task = self._find_task(
+            "__planner__", "planner"
+        )
+
+        if planner_task is not None:
+            if planner_task.status in (
+                TaskStatus.pending, TaskStatus.running,
+            ):
+                return  # already running
+
+            if planner_task.status == TaskStatus.success:
+                wt_path = planner_task.context.get(
+                    "worktree_path", ""
+                )
+                self._dispatcher.on_planning_completed(
+                    planner_task.result, wt_path
+                )
+                # Clear the planner task so future calls
+                # can detect needs_planning() again
+                self._tasks = [
+                    t for t in self._tasks
+                    if t.id != planner_task.id
+                ]
+                return
+
+        # No planner task or previous one failed — launch new
+        if (
+            len(self._running_asyncio_tasks)
+            < self._config.max_concurrent_tasks
+        ):
+            await self._dispatch_planner()
 
     async def _launch_task(
         self, task: Task, component_name: str
@@ -632,6 +744,19 @@ class Runtime:
             )
             return await evaluator.execute(task)
 
+        if component_name == "planner":
+            spec = self._component_specs["planner"]
+            planner = PlannerComponent(
+                spec=spec,
+                llm_client=self._llm_client,
+                tool_registry=self._tool_registry,
+                event_log=self._event_log,
+                id_generator=self._id_gen,
+                project_dir=self._project_dir,
+                docker_client=self._docker_client,
+            )
+            return await planner.execute(task)
+
         msg = f"Unknown component: {component_name}"
         raise ValueError(msg)
 
@@ -688,6 +813,9 @@ class Runtime:
                 "metrics": metrics,
                 "passed": passed,
             },
+        )
+        self._dispatcher.on_candidate_completed(
+            candidate, evaluation
         )
 
     # -- Feedback and evolution helpers ------------------------------------
