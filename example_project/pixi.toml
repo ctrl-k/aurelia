@@ -6,6 +6,7 @@ platforms = ["osx-arm64", "osx-64", "linux-64"]
 
 [dependencies]
 python = ">=3.12"
+numpy = ">=1.26"
 
 [pypi-dependencies]
 pytest = ">=8.0"
