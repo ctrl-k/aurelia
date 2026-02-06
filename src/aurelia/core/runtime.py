@@ -337,26 +337,11 @@ class Runtime:
         if coder_task.status != TaskStatus.success:
             return
 
-        # Coder succeeded — check presubmit
-        presubmit_task = self._find_task(candidate.branch, "presubmit")
-
-        if presubmit_task is None:
-            if len(self._running_asyncio_tasks) < self._config.max_concurrent_tasks:
-                await self._dispatch_presubmit(candidate)
-            return
-
-        if presubmit_task.status == TaskStatus.running:
-            return
-
-        if presubmit_task.status == TaskStatus.failed:
-            await self._fail_candidate(candidate, presubmit_task)
-            return
-
-        if presubmit_task.status != TaskStatus.success:
-            return
-
-        # Presubmit succeeded — check evaluator
-        eval_task = self._find_task(candidate.branch, "evaluator")
+        # Coder succeeded — check evaluator (which now includes presubmit)
+        # Only consider eval tasks created after the coder task (for retry support)
+        eval_task = self._find_task(
+            candidate.branch, "evaluator", after=coder_task.created_at
+        )
 
         if eval_task is None:
             if len(self._running_asyncio_tasks) < self._config.max_concurrent_tasks:
@@ -364,9 +349,24 @@ class Runtime:
             return
 
         if eval_task.status == TaskStatus.success:
-            await self._finish_candidate(candidate, eval_task)
+            # Check if the evaluator returned an error (presubmit failed, invalid JSON, etc.)
+            # This is different from the task failing (exception) - the task completed but
+            # the evaluation itself had an error.
+            has_error = eval_task.result and eval_task.result.error is not None
+            if has_error:
+                # Treat evaluation errors like task failures - retry or fail
+                if candidate.eval_retry_count < self._config.max_eval_retries:
+                    await self._retry_candidate(candidate, eval_task, "evaluation")
+                else:
+                    await self._fail_candidate(candidate, eval_task)
+            else:
+                await self._finish_candidate(candidate, eval_task)
         elif eval_task.status == TaskStatus.failed:
-            await self._fail_candidate(candidate, eval_task)
+            # Check if we should retry by reassigning to coder
+            if candidate.eval_retry_count < self._config.max_eval_retries:
+                await self._retry_candidate(candidate, eval_task, "evaluation")
+            else:
+                await self._fail_candidate(candidate, eval_task)
 
     async def _fail_candidate(self, candidate: Candidate, failed_task: Task) -> None:
         """Mark a candidate as failed due to a task failure."""
@@ -381,6 +381,62 @@ class Runtime:
             },
         )
         self._dispatcher.on_candidate_completed(candidate, None)
+
+    async def _retry_candidate(
+        self,
+        candidate: Candidate,
+        failed_task: Task,
+        failure_stage: str,
+    ) -> None:
+        """Retry a candidate by reassigning to coder with error feedback.
+
+        Instead of failing the candidate immediately, this dispatches a new
+        coder task with the failure details so the coder can attempt to fix it.
+        """
+        candidate.eval_retry_count += 1
+        candidate.status = CandidateStatus.active
+
+        error = failed_task.result.error if failed_task.result else "unknown error"
+        summary = failed_task.result.summary if failed_task.result else ""
+
+        # Build retry instruction with error context
+        retry_instruction = (
+            f"The previous attempt failed during {failure_stage}. "
+            f"Please fix the issue and ensure the code passes all checks.\n\n"
+            f"Error: {error}\n"
+        )
+        if summary and summary != error:
+            retry_instruction += f"Details: {summary}\n"
+
+        await self._emit(
+            "candidate.retry",
+            {
+                "candidate_id": candidate.id,
+                "branch": candidate.branch,
+                "retry_count": candidate.eval_retry_count,
+                "failure_stage": failure_stage,
+                "error": error,
+            },
+        )
+
+        logger.info(
+            "Retrying candidate %s (attempt %d/%d) after %s failure",
+            candidate.id,
+            candidate.eval_retry_count + 1,
+            self._config.max_eval_retries + 1,
+            failure_stage,
+        )
+
+        # Dispatch new coder task with error feedback
+        await self._dispatch_coder(
+            candidate,
+            retry_instruction,
+            extra_context={
+                "retry_attempt": candidate.eval_retry_count,
+                "failure_stage": failure_stage,
+                "previous_error": error,
+            },
+        )
 
     # -- Helper methods --------------------------------------------------
 
@@ -403,10 +459,22 @@ class Runtime:
             )
         ]
 
-    def _find_task(self, branch: str, component: str) -> Task | None:
-        """Find the most recent task for a branch and component."""
+    def _find_task(
+        self,
+        branch: str,
+        component: str,
+        after: datetime.datetime | None = None,
+    ) -> Task | None:
+        """Find the most recent task for a branch and component.
+
+        If `after` is provided, only considers tasks created after that time.
+        This is used to ensure we only look at presubmit/eval tasks from the
+        current coder attempt, not from previous retry attempts.
+        """
         for task in reversed(self._tasks):
             if task.branch == branch and task.component == component:
+                if after is not None and task.created_at <= after:
+                    continue
                 return task
         return None
 
@@ -482,35 +550,12 @@ class Runtime:
         )
         await self._launch_task(task, "coder")
 
-    async def _dispatch_presubmit(self, candidate: Candidate) -> None:
-        """Create and launch a presubmit task in the background."""
-        task = Task(
-            id=self._id_gen.next_id("task"),
-            thread_id=self._id_gen.next_id("thread"),
-            component="presubmit",
-            branch=candidate.branch,
-            instruction="Run presubmit checks",
-            status=TaskStatus.pending,
-            context={
-                "worktree_path": candidate.worktree_path,
-                "checks": self._config.presubmit_checks,
-            },
-            created_at=datetime.datetime.now(datetime.UTC),
-        )
-        self._tasks.append(task)
-        self._runtime_state.total_tasks_dispatched += 1
-
-        await self._emit(
-            "task.created",
-            {
-                "task_id": task.id,
-                "component": "presubmit",
-            },
-        )
-        await self._launch_task(task, "presubmit")
-
     async def _dispatch_evaluator(self, candidate: Candidate) -> None:
-        """Create and launch an evaluator task in the background."""
+        """Create and launch an evaluator task in the background.
+
+        The evaluator now handles both presubmit checks (tests) and evaluation
+        in a single task to avoid running eval twice.
+        """
         candidate.status = CandidateStatus.evaluating
 
         task = Task(
@@ -522,6 +567,7 @@ class Runtime:
             status=TaskStatus.pending,
             context={
                 "worktree_path": candidate.worktree_path,
+                "presubmit_checks": self._config.presubmit_checks,
             },
             created_at=datetime.datetime.now(datetime.UTC),
         )
@@ -791,7 +837,10 @@ class Runtime:
     ) -> None:
         """Record evaluation result and update candidate status."""
         metrics: dict[str, Any] = eval_task.result.metrics if eval_task.result else {}
-        passed = self._check_metrics_pass(metrics)
+
+        # Check if the evaluator returned an error (presubmit failed, invalid JSON, etc.)
+        has_error = eval_task.result and eval_task.result.error is not None
+        passed = not has_error and self._check_metrics_pass(metrics)
 
         # Try to retrieve the latest commit SHA
         try:

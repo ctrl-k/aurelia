@@ -1,4 +1,9 @@
-"""Evaluator component — runs evaluation scripts via subprocess or Docker."""
+"""Evaluator component — runs presubmit checks and evaluation scripts.
+
+This component combines presubmit (tests) and evaluation into a single step.
+It first runs any configured presubmit checks (e.g., tests), then runs the
+evaluation script and collects metrics.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +26,7 @@ from aurelia.core.models import Event, SandboxConfig, Task, TaskResult
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_S = 120
+_PRESUBMIT_TIMEOUT_S = 120
 _DOCKERFILE_PATH = Path(__file__).parent.parent / "sandbox" / "Dockerfile.evaluator"
 _DEFAULT_IMAGE = "aurelia-evaluator:latest"
 
@@ -29,7 +35,11 @@ _DEFAULT_EVAL_COMMAND = "pixi run evaluate"
 
 
 class EvaluatorComponent:
-    """Runs the evaluation command in a candidate worktree and collects metrics.
+    """Runs presubmit checks and evaluation in a candidate worktree.
+
+    This component:
+    1. First runs presubmit checks (e.g., tests) - if any fail, the task fails
+    2. Then runs the evaluation command and parses JSON metrics
 
     Supports two modes:
     - Subprocess (default): Runs directly on host
@@ -78,9 +88,13 @@ class EvaluatorComponent:
     # ------------------------------------------------------------------
 
     async def execute(self, task: Task) -> TaskResult:
-        """Run evaluation in the worktree.
+        """Run presubmit checks and evaluation in the worktree.
 
-        Runs the evaluation command (default ``pixi run evaluate``) in the
+        First runs any presubmit checks (e.g., tests) specified in
+        ``task.context["presubmit_checks"]``. If any check fails, returns
+        immediately with an error.
+
+        Then runs the evaluation command (default ``pixi run evaluate``) in the
         worktree directory specified by ``task.context["worktree_path"]``.
         Override the command by setting ``task.context["eval_command"]``.
         Parses JSON output from stdout into metrics.  Returns a
@@ -92,8 +106,60 @@ class EvaluatorComponent:
         """
         worktree_path = task.context["worktree_path"]
         eval_command = task.context.get("eval_command", _DEFAULT_EVAL_COMMAND)
+        presubmit_checks: list[str] = task.context.get("presubmit_checks", [])
         result_id = self._id_gen.next_id("result")
 
+        # Step 1: Run presubmit checks (tests)
+        if presubmit_checks:
+            await self._emit(
+                "eval.presubmit_started",
+                {
+                    "task_id": task.id,
+                    "worktree": worktree_path,
+                    "checks": presubmit_checks,
+                },
+            )
+
+            for check in presubmit_checks:
+                exit_code, stdout, stderr = await self._execute_subprocess(
+                    worktree_path, check, timeout_s=_PRESUBMIT_TIMEOUT_S
+                )
+
+                if exit_code == -1:
+                    error_msg = f"Presubmit check '{check}' timed out"
+                    await self._emit(
+                        "eval.presubmit_failed",
+                        {"task_id": task.id, "check": check, "error": error_msg},
+                    )
+                    return TaskResult(
+                        id=result_id,
+                        summary=error_msg,
+                        error=error_msg,
+                        metrics={},
+                    )
+
+                if exit_code != 0:
+                    error_msg = f"Presubmit check '{check}' failed (exit {exit_code})"
+                    detail = stderr or stdout
+                    if detail:
+                        error_msg += f": {detail[:500]}"
+                    await self._emit(
+                        "eval.presubmit_failed",
+                        {"task_id": task.id, "check": check, "error": error_msg},
+                    )
+                    return TaskResult(
+                        id=result_id,
+                        summary=error_msg,
+                        error=error_msg,
+                        metrics={},
+                    )
+
+            await self._emit(
+                "eval.presubmit_passed",
+                {"task_id": task.id, "checks_passed": len(presubmit_checks)},
+            )
+
+        # Step 2: Run evaluation
         await self._emit(
             "eval.started",
             {
@@ -133,18 +199,33 @@ class EvaluatorComponent:
             await self._emit("eval.failed", {"task_id": task.id, "error": error_msg})
             return result
 
-        # Parse JSON metrics
+        # Parse JSON metrics - try full output first, then last line
+        # (evaluate.py may print human-readable summary before JSON)
+        metrics: dict[str, float] = {}
         try:
-            metrics: dict[str, float] = json.loads(stdout)
+            metrics = json.loads(stdout)
         except (json.JSONDecodeError, ValueError):
-            result = TaskResult(
-                id=result_id,
-                summary="Evaluation output not valid JSON",
-                error=stdout,
-                metrics={},
-            )
-            await self._emit("eval.failed", {"task_id": task.id, "error": "invalid JSON output"})
-            return result
+            # Try parsing just the last non-empty line as JSON
+            for line in reversed(stdout.strip().splitlines()):
+                line = line.strip()
+                if line:
+                    try:
+                        metrics = json.loads(line)
+                        break
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+
+            if not metrics:
+                result = TaskResult(
+                    id=result_id,
+                    summary="Evaluation output not valid JSON",
+                    error=stdout[-500:] if len(stdout) > 500 else stdout,
+                    metrics={},
+                )
+                await self._emit(
+                    "eval.failed", {"task_id": task.id, "error": "invalid JSON output"}
+                )
+                return result
 
         result = TaskResult(
             id=result_id,
@@ -155,15 +236,18 @@ class EvaluatorComponent:
         return result
 
     async def _execute_subprocess(
-        self, worktree_path: str, eval_command: str
+        self,
+        worktree_path: str,
+        command: str,
+        timeout_s: int = _TIMEOUT_S,
     ) -> tuple[int, str, str]:
-        """Execute evaluation via direct subprocess.
+        """Execute a command via direct subprocess.
 
         Uses process groups to ensure all child processes are cleaned up
         on timeout or cancellation.
         """
         proc = await asyncio.create_subprocess_shell(
-            eval_command,
+            command,
             cwd=worktree_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -171,14 +255,14 @@ class EvaluatorComponent:
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=_TIMEOUT_S
+                proc.communicate(), timeout=timeout_s
             )
             return proc.returncode or 0, stdout_bytes.decode(), stderr_bytes.decode()
         except (TimeoutError, asyncio.CancelledError):
             # Kill the entire process group to clean up all children
             self._kill_process_group(proc.pid)
             await proc.wait()
-            return -1, "", "Evaluation timed out or cancelled"
+            return -1, "", f"Command timed out after {timeout_s}s or cancelled"
 
     def _kill_process_group(self, pid: int) -> None:
         """Kill a process group, first with SIGTERM then SIGKILL."""

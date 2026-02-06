@@ -8,30 +8,30 @@ class TestNextId:
     def test_sequential_with_prefix(self):
         state = RuntimeState()
         gen = IdGenerator(state)
-        assert gen.next_id("task") == "task-0001"
-        assert gen.next_id("task") == "task-0002"
-        assert gen.next_id("task") == "task-0003"
+        assert gen.next_id("task") == "task-000001"
+        assert gen.next_id("task") == "task-000002"
+        assert gen.next_id("task") == "task-000003"
 
     def test_zero_padding(self):
         state = RuntimeState()
         gen = IdGenerator(state)
         id_ = gen.next_id("cand")
-        assert id_ == "cand-0001"
-        assert len(id_.split("-")[1]) == 4
+        assert id_ == "cand-000001"
+        assert len(id_.split("-")[1]) == 6
 
     def test_independent_prefixes(self):
         state = RuntimeState()
         gen = IdGenerator(state)
-        assert gen.next_id("task") == "task-0001"
-        assert gen.next_id("cand") == "cand-0001"
-        assert gen.next_id("task") == "task-0002"
-        assert gen.next_id("cand") == "cand-0002"
+        assert gen.next_id("task") == "task-000001"
+        assert gen.next_id("cand") == "cand-000001"
+        assert gen.next_id("task") == "task-000002"
+        assert gen.next_id("cand") == "cand-000002"
 
-    def test_overflow_past_9999(self):
-        state = RuntimeState(next_seq={"task": 9999})
+    def test_overflow_past_999999(self):
+        state = RuntimeState(next_seq={"task": 999999})
         gen = IdGenerator(state)
-        assert gen.next_id("task") == "task-9999"
-        assert gen.next_id("task") == "task-10000"
+        assert gen.next_id("task") == "task-999999"
+        assert gen.next_id("task") == "task-1000000"
 
     def test_state_is_mutated(self):
         state = RuntimeState()

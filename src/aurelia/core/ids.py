@@ -1,7 +1,7 @@
 """Deterministic, sequential, type-prefixed ID generator.
 
-IDs are formatted as "<prefix>-<seq>" where seq is zero-padded to at least
-4 digits. The counters are maintained in RuntimeState.next_seq and
+IDs are formatted as "<prefix>-<seq>" where seq is zero-padded to 6 digits.
+The counters are maintained in RuntimeState.next_seq and
 RuntimeState.next_event_seq for global event ordering.
 """
 
@@ -19,11 +19,11 @@ class IdGenerator:
     def next_id(self, prefix: str) -> str:
         """Generate the next ID for the given type prefix.
 
-        Example: next_id("task") -> "task-0001", "task-0002", ...
+        Example: next_id("task") -> "task-000001", "task-000002", ...
         """
         current = self._state.next_seq.get(prefix, 1)
         self._state.next_seq[prefix] = current + 1
-        return f"{prefix}-{current:04d}"
+        return f"{prefix}-{current:06d}"
 
     def next_event_seq(self) -> int:
         """Return the next global event sequence number."""

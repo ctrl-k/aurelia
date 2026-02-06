@@ -156,6 +156,7 @@ class Candidate(BaseModel):
     evaluations: list[str] = Field(default_factory=list)
     created_at: datetime
     worktree_path: str | None = None
+    eval_retry_count: int = 0  # Track how many times eval has been retried
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +197,7 @@ class RuntimeConfig(BaseModel):
     heartbeat_file: str = "HEARTBEAT.md"
     task_timeout_s: int = 600  # 10 minutes default
     heartbeat_stale_threshold_s: int = 120  # 2 minutes - warn if stale
+    max_eval_retries: int = 2  # Max times to retry eval by reassigning to coder
 
 
 class RuntimeState(BaseModel):
